@@ -8,5 +8,5 @@ function dudt = oscillator_rhs(t, u, M, D, K, f)
     % evaluate forcing 
     f_eval = f(t);
     % apply linear transformations
-    dudt = [dxdt; -M\(D*dxdt-K*x+f_eval)];
+    dudt = [dxdt; -M\(D*dxdt+K*x+f_eval)];
 end
