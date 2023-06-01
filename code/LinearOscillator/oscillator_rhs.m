@@ -1,4 +1,4 @@
-function dudt = rhs(t, u, M, D, K, f)
+function dudt = oscillator_rhs(t, u, M, D, K, f)
     % Right hand side of the linear oscillator, of dimension 2d
     assert(mod(length(u), 2)==0);
     d = length(u)/2;
