@@ -29,11 +29,11 @@ options = odeset("RelTol",1e-4);
 %% Test 2: integrate oscillators with white noise and random IC
 clear; clc; rng("default");
 
-d = 20;
+d = 50;
 u0 = randn(2*d,1);
 tstart = 0.0;
 tend = 10.0;
-dt = 1e-3;
+dt = 1e-4;
 tspan = tstart:dt:tend;
 eta = 1.0;
 % create mass, damping, stiffness matrices
@@ -64,13 +64,15 @@ plot(u_sol(1:d, :)');
 %% Test 3: integrate oscillators with correlated noise and random IC
 clear; clc; rng("default");
 
-d = 20;
+d = 100;
 u0 = randn(3*d,1);
 tstart = 0.0;
-tend = 20.0;
-dt = 1e-3;
+tend = 10.0;
+dt = 2e-3;
 tspan = tstart:dt:tend;
-eta = 1.0;
+nt = length(tspan);
+
+eta = 2.0;
 % define parameters for OU process
 delta = 1e-2;
 
@@ -112,7 +114,26 @@ em_stepping.step = @(t, u) euler_maruyama_step(t, u, drift, diffusion, dt, eta, 
 
 % generate trajectory
 u_sol = sde_solve(em_stepping);
-figure(1);
-plot(u_sol(1:d, :)');
-figure(2);
-plot(u_sol((2*d+1):end, :)')
+
+visualize = true;
+if visualize
+    figure(1);
+    plot(u_sol(1:d, :)');
+    figure(2);
+    plot(u_sol((2*d+1):end, :)')
+end
+
+% compute energy of the system
+v = zeros(nt,1);
+parfor i = 1:nt
+    if mod(i,5)==0
+        disp(i);
+    end
+    u_i = u_sol(1:d,i);
+    v(i) = energy(u_i,params.K);
+end
+
+
+
+
+

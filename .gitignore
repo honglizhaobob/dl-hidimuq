@@ -138,4 +138,7 @@ ui-tests/.pnp.*
 
 
 ################# MATLAB #######################
+# ignore MATLAB cache files 
 *.asv
+# ignore data files
+*.mat
