@@ -112,25 +112,15 @@ drift = @linear_oscillator_ou_noise_drift;
 diffusion = @linear_oscillator_ou_noise_diffusion;
 em_stepping.step = @(t, u) euler_maruyama_step(t, u, drift, diffusion, dt, eta, params);
 
-% generate trajectory
-u_sol = sde_solve(em_stepping);
-
-visualize = true;
-if visualize
-    figure(1);
-    plot(u_sol(1:d, :)');
-    figure(2);
-    plot(u_sol((2*d+1):end, :)')
-end
-
+% define energy function wrapper
+potential_energy = @(x) energy(x, params.K);
 % compute energy of the system
 v = zeros(nt,1);
 parfor i = 1:nt
     if mod(i,5)==0
         disp(i);
     end
-    u_i = u_sol(1:d,i);
-    v(i) = energy(u_i,params.K);
+    v(i) = sde_solve_energy(em_stepping, potential_energy);
 end
 
 

@@ -9,9 +9,9 @@ clear; clc; rng("default");
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % number of trials
-nmc = 1e+3;
+nmc = 5e+4;
 % problem dimension
-d = 50;
+d = 100;
 % time grid
 tstart = 0.0;
 tend = 10.0;
@@ -42,6 +42,9 @@ params.f = f;
 params.eta = eta;
 params.delta = delta;
 
+% energy function wrapper
+potential_energy = @(x) energy(x(1:d), params.K);
+
 % create SDE scheme
 em_stepping.tgrid = tspan;
 drift = @linear_oscillator_ou_noise_drift;
@@ -52,7 +55,6 @@ diffusion = @linear_oscillator_ou_noise_diffusion;
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % preallocate
-u_data = zeros(nmc,3*d,nt);
 v_data = zeros(nmc,nt);
 for i = 1:nmc
     if mod(i,10)==0
@@ -72,14 +74,9 @@ for i = 1:nmc
     params.C = C;
     em_stepping.step = @(t, u) euler_maruyama_step(t, u, drift, diffusion, dt, eta, params);
     em_stepping.u0 = u0;
-    % generate trajectory
-    u_sol = sde_solve(em_stepping);
-    % store
-    u_data(i, :, :) = u_sol;
-    % compute energy
-    for j = 1:nt
-        v_data(i,j) = energy(u_sol(1:d,j),params.K); 
-    end
+    % generate energy trajectory
+    v_sol = sde_solve_energy(em_stepping, potential_energy);
+    v_data(i,:) = v_sol(:);
 end
 
 %% Save data
