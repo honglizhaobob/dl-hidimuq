@@ -123,35 +123,6 @@ parfor i = 1:nt
     v(i) = sde_solve_energy(em_stepping, potential_energy);
 end
 
-%% Test 4: 2 norm error of approximating inverse of a matrix
-clear; clc; rng("default");
-n = 100;
-X = randn(n, n);
-X_inv = pinv(X);
-[U,S,V] = svd(X);
-r = 1:n-1;
-l2_err = zeros(n-1,1);
-l2_err_inv = zeros(n-1,1);
-for i = r
-    Si = S;
-    Si(i+1:end,i+1:end) = 0;
-    % approximation
-    Xi = U*Si*V';
-    [U_inv,S_inv,V_inv] = svd(Xi);
-    Si = S_inv;
-    Si(i+1:end,i+1:end) = 0;
-    Xi_inv = U_inv*Si*V_inv';
-    l2_err(i) = norm(Xi-X, 2);
-    l2_err_inv(i) = norm(Xi_inv-X_inv,2);
-end
-
-
-
-
-
-
-
-
 
 
 

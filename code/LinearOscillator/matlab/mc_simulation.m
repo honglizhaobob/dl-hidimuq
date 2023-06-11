@@ -79,21 +79,35 @@ for i = 1:nmc
     v_data(i,:) = v_sol(:);
 end
 
+%% Load data
+load_path = "./data/LinearOscillator/OU_noise_energy.mat";
+load(load_path)
 %% Save data
 save_path = "./data/LinearOscillator/OU_noise_energy.mat";
 save(save_path);
 %% Estimate density of potential
-nx = 1e+3;
+nx = 2e+3;
 v_density = zeros(nx,nt);
-xi = linspace(0, 5e+3, nx);
+xi = linspace(0, 4.5e+3, nx);
 for i = 1:nt
     disp(i)
-    [f, ~] = ksdensity(v_data(:,i),xi);
+    % energy will never be negative
+    [f, ~] = ksdensity(v_data(:,i),xi, ...
+        "Support","Positive");
     v_density(:,i) = f;
+    % normalize
+    mass = trapz(xi,v_density(:,i));
+    v_density(:,i) = v_density(:,i)./mass;
 end
 %%
 for i = 1:nt
     figure(1);
     plot(xi, v_density(:,i))
-    ylim([0 0.015])
+    ylim([0 0.001])
 end
+
+
+
+
+
+
