@@ -3,6 +3,25 @@
 # 
 #           p_t + d_dx ( G(t, x) * p ) = d2_dx2 ( D(t, x) * p)
 # where G, D are respectively drift and diffusion coefficients that are generally depenedent on time. 
+# This module assumes that p(t, x) is a 1-dimensional solution of RO-PDF.
+#
+# The order of input for the NN solution is assumed to be: p_nn(t_i, x_j) and data ordering
+# will always be assumed as (column major order):
+#               [t_0, x_0]              => p_nn(0, 0)
+#               [t_1, x_0]              => p_nn(1, 0)
+#                 ...
+#               [t_max, x_0]            => p_nn(nt, 0)
+#                 ---
+#               [t_0, x_1]              => p_nn(0, 1)
+#               [t_1, x_1]              => p_nn(1, 1)
+#                 ...
+#               [t_max, x_1]            => p_nn(nt, 1)
+#                 ---
+#               [t_0, x_max]            => p_nn(0, nx)
+#               [t_1, x_max]            => p_nn(1, nx)
+#                 ...
+#               [t_max, x_max]          => p_nn(nt, nx)
+
 
 
 ################################################################################
@@ -69,7 +88,7 @@ class G_Net(nn.Module):
         each of which has 64 nodes, and `tanh` activation function.
     """
     def __init__(self, layers=[2, 64, 64, 1]):
-        super(F_Net, self).__init__()
+        super(G_Net, self).__init__()
         self.net = DNN(layers)
 
     def forward(self, inputs):
@@ -86,9 +105,20 @@ class D_Net(nn.Module):
 
     """
     def __init__(self, layers=[2, 32, 1]):
-        super(S_Net, self).__init__()
+        super(D_Net, self).__init__()
         self.net = DNN(layers)
 
+    def forward(self, inputs):
+        return self.net(inputs)
+
+class P_Net(nn.Module):
+    """
+        A densely connected neural network surrogate for the 
+        solution for the RO-PDF equation.
+    """
+    def __init__(self, layers=[2, 64, 64, 64, 1]):
+        super(P_Net, self).__init__()
+        self.net = DNN(layers)
     def forward(self, inputs):
         return self.net(inputs)
 
@@ -102,11 +132,6 @@ class PhysicsInformedROPDF(nn.Module):
         self.outdim = outdim
         # load data
         self.load_data(data_path) 
-
-        # define LED closure data
-        self.load_pde_physics()
-        # load Fmc data computed in MATLAB
-        self.load_Fmc_data()
         # initialize NNs
         self.build_models()
         # initialize optimizer
@@ -124,18 +149,12 @@ class PhysicsInformedROPDF(nn.Module):
         # number of samples for evaluating PDE loss
         self.num_pde_samples = 10000
 
-    def build_models(self):
-        """ Initialize neural nets. """
-        # solution neural net
-        self.F_nn = F_Net()
-        self.S_nn = S_Net()
-
     def forward(self, inputs):
         """ 
             Generate approximate PDE solution. Input
             `X` should be grid data of form [x, t]. 
         """
-        return self.F_nn(inputs)
+        return self.p_nn(inputs)
     
     def gradient(self, outputs, inputs, order=1):
         """ 
@@ -151,234 +170,203 @@ class PhysicsInformedROPDF(nn.Module):
         return grads
 
 
+    def build_models(self):
+        """ Initialize neural nets. """
+
+        # neural nets for coefficients
+        self.G_nn = G_Net()
+        self.D_nn = D_Net()
+
+        # solution neural net
+        self.p_nn = P_Net()
+
     def load_data(self, path):
-        """ Load and preprocess approximation on grid. """
-        self.raw_data = scipy.io.loadmat("Fqoi.mat")
-        # Fmc solution (Nx x Nt)
-        self.Fmc = self.raw_data['Fqoi'] 
+        """
+            Loads a low-fidelity kernel density estimate of the density
+            at different times.
+
+            The data contained in `path` is assumed to have the following
+            fields:
+
+            data[`t_grid`]                  1d time grid.
+            data[`x_grid`]                  1d spatial grid.
+            data[`pmc`]                     (Nt x Nx) array containing 
+                                            a solution estimate at (t_i, x_j).
+        """
+        self.raw_data = scipy.io.loadmat(path)
+        # unpack variables
+
         # PDE domain
-        self.xgrid = self.raw_data['x_grid'].reshape(-1, 1)
-        self.tgrid = self.raw_data['t_grid'].reshape(-1, 1)
-        self.xmin = self.xgrid.min()
-        self.xmax = self.xgrid.max()
+        self.tgrid = self.raw_data["t_grid"].reshape(-1, 1)
         self.tmin = self.tgrid.min()
         self.tmax = self.tgrid.max()
-        # grid sizes (uniform grid)
+        self.nt = len(self.tgrid)
         self.dt = self.tgrid[1]-self.tgrid[0]
+
+        self.xgrid = self.raw_data["x_grid"].reshape(-1, 1)
+        self.xmin = self.xgrid.min()
+        self.xmax = self.xgrid.max()
+        self.nx = len(self.xgrid)
         self.dx = self.xgrid[1]-self.xgrid[0]
-        self.Nt = len(self.tgrid)
-        self.Nx = len(self.xgrid)
-        # total number of points in the domain
-        self.N_grid = int(self.Nt*self.Nx)
 
-    def load_pde_physics(self):
-        """ 
-            Loads advection, diffusion terms for the PDE, 
-            and generates input grid points. 
-
-            Input:
-                (xmin, tmin)
-                (x1, tmin),
-                (x2, tmin),
-                ...
-                (xmax, tmin),
-                ---
-                (xmin, t1),
-                (x1, t1),
-                ...
-                (xmax, t1),
-                ...
-                (xmin, tmax),
-                ...
-                (xmax, tmax)
-
-            Output:
-                Fnn(xmin, tmin),
-                Fnn(x1, tmin),
-                ...
-                Fnn(xmax, tmin),
-                Fnn(x1, t1),
-                ...
-                Fnn(x1, t1),
-                ...
-                Fnn(xmin, tmax),
-                ...
-                Fnn(xmax, tmax)
-        """
-        # PDE parameter: D_gam
-        self.Dgam = self.raw_data['Dgam'][0][0]
-
-        # <v(x,t)> = (th(x) - <h(t)>)/Dgam, stored as (Nx x Nt) matrix
-        self.advection = self.raw_data['advection']
-
-        # (\int_0^t<v'(t)v'(s)>ds)/Dgam^2, stored as (Nx x Nt) matrix (only depends on t, repeats in x axis)
-        self.diffusion = self.raw_data['diffusion']
-
-        # organize input data for PDE regression
-        xgrid_pnts, tgrid_pnts = np.meshgrid(self.xgrid.reshape(-1, 1), self.tgrid.reshape(-1, 1))
-        all_pnts = np.vstack([xgrid_pnts.ravel(), tgrid_pnts.ravel()]).T
-
-        xr = torch.tensor(all_pnts[:, 0].reshape(-1, 1), requires_grad=True)
-        tr = torch.tensor(all_pnts[:, 1].reshape(-1, 1), requires_grad=True)
-        # all grid points for main domain PDE solution, should correspond to column-major flattening
-
-        # size (Nx * Nt x 2)
-        X_gridded = torch.concat([xr, tr], axis=1)
-
-        # flatten advection term: (xi, tj) => <v(xi, tj)>
-        advection_gridded = torch.tensor(self.advection.flatten("F").reshape(-1, 1))
-
-        # flatten diffusion term: (xi, tj) => D(xi, tj), here `xi` is dummy variable
-        diffusion_gridded = torch.tensor(self.diffusion.flatten("F").reshape(-1, 1))
-
-        # !!!! todo: fit splines to advection and diffusion so random locations can be queried
-
-        # bind data
-        self.pde_data = (X_gridded, advection_gridded, diffusion_gridded)
-    
-    def load_Fmc_data(self):
-        """ 
-            loads solution data from numerical solver. 
-            Flattened in column major.
-            (xi, tj) => Fmc(xi, tj), where points are organized as:
-
-            (xmin, tmin)
-            (x1, tmin),
-            (x2, tmin),
-            ...
-            (xmax, tmin),
-            ---
-            (xmin, t1),
-            (x1, t1),
-            ...
-            (xmax, t1),
-            ...
-            (xmin, tmax),
-            ...
-            (xmax, tmax)
-        """
-        self.fmc_data = torch.tensor(self.Fmc.flatten("F")).reshape(-1, 1)
+        # (low-accuracy) solution from KDE
+        self.pmc = self.raw_data["pmc"]
+        assert self.pmc.shape[0] == self.nt
+        assert self.pmc.shape[1] == self.nx
 
 ######################################################################
 # Loss functions
 ######################################################################
     def domain_loss(self, inputs, outputs, advection_diffusion_data=None, fresh_samples=False):
-        """ 
-            PDE closure inside the domain, evaluated on random
-            samples (independently generated of batch data).
+        pass
 
-            advection_diffusion_data:       specifies how the advection-diffusion
-                                            terms are computed. By default, it is
-                                            `None`, in which case the advection-
-                                            diffusion terms will be interpolated
-                                            using a pre-fitted spline at arbitrary
-                                            points. Otherwise, the user can input 
-                                            the discrete values at grid points, 
-                                            organized in a (N x 2) array [adv, diff],
-                                            please make sure that the queried indices 
-                                            are consistent with those of the PDE solution
-                                            `outputs`.
-
-            fresh_samples:                  If `True`, randomly sample the domain and make
-                                            predictions separately, instead of using the 
-                                            input prediction data.
+    def data_loss(self, inputs, pmc, gamma=0.0, ic_weight=1/4, lbc_weight=1/4, rbc_weight=1/4):
         """
-        # !!! Note (01/05/2022) the advection and diffusion need to be redone 
-        # as basis interpolations rather than grid points. Due to random batches,
-        # it's difficult to keep track of the grid point indices (to index into
-        # and get the correct advection and diffusion values.)
+            Given `inputs`, and output `pmc`, evaluates neural net
+            solution at `inputs` and compute (generalized) least square
+            loss on the predictions.
 
-        if fresh_samples:
+            The KDE data is assumed to contain initial condition and 
+            boundary condition. During evaluation, they can be potentially 
+            weighted differently.
+
+            Note that if `self.data_loss()` is used, there will be no need to
+            include `self.boundary_loss()` and `self.initial_loss()`. It is
+            assumed that we are in the data-rich regime whenever `self.data_loss()`
+            is used. 
+
+
+            Inputs:
+                inputs                          Flattened temporal-spatial 
+                                                locations where we have an 
+                                                estimate of the solution.
+                
+                pmc                             Flattened estimate values 
+                                                corresponding locations in `inputs`.
+                
+                gamma                           Generalized least squares exponent,
+                                                defaults to 0.0 (standard LS)
+                
+                ic_weight, bc_weight            Weights of initial condition and 
+                                                boundary condition for final loss sum.
+                                                `interior_weight` = 
+                                                    1.0 - ic_weight - (lbc_weight + rbc_weight)
+
+                                                Defaults to equal weights.  
+        """
+        n_samples = len(pmc)
+        assert inputs.shape[0] == n_samples
+        assert inputs.shape[1] == 2 # time and 1d space
+
+        # find indices of left boundary, right boundary, initial condition
+        initial_data_locs = (inputs[:, 0][:, None] == self.tmin)
+        left_boundary_data_locs = (inputs[:, 1][:, None] == self.xmin)
+        right_boundary_data_locs = (inputs[:, 1][:, None] == self.xmax)
+        internal_data_locs = torch.logical_not(
+            torch.logical_or(
+                initial_data_locs, 
+                torch.logical_or(
+                    left_boundary_data_locs, 
+                    right_boundary_data_locs
+                )
+            )
+        )
+
+        # compute residual 
+        p = self.p_nn(inputs)
+        if gamma:
+            # generalized least squares (stable division)
+            residual = torch.exp(
+                2 * ( torch.log((p - pmc)) - gamma * torch.log(torch.abs(p)) )
+            )
+        else:
+            # regular least squares
+            residual = (p - pmc) ** 2
+
+        # modify weights of different contributions
+
+        # initial condition
+        residual *= torch.where(
+            initial_data_locs,
+            ic_weight * torch.ones_like(residual),
+            torch.ones_like(residual)
+        )
+
+        # left boundary 
+        residual *= torch.where(
+            left_boundary_data_locs,
+            lbc_weight * torch.ones_like(residual),
+            torch.ones_like(residual)
+        )
+
+        # right boundary
+        residual *= torch.where(
+            right_boundary_data_locs,
+            rbc_weight * torch.ones_like(residual),
+            torch.ones_like(residual)
+        )
+
+        # internal
+        residual *= torch.where(
+            internal_data_locs,
+            (1 - ic_weight - (lbc_weight + rbc_weight)) * torch.ones_like(residual),
+            torch.ones_like(residual)
+        )
+        residual = torch.mean(residual)
+        return residual
+    
+    def boundary_loss(self, n_samples, strategy="uniform"):
+        """
+            Evaluates PDE loss on the boundary. The boundary for the 
+            RO-PDF equation is assumed to be vanishing.
+
+            Inputs:
+                n_samples                   number of spatial locations to query. 
+                                            The effective data size will be 
+                                            `n_samples * self.nt`
+                strategy                    strategy used to generate points on the 
+                                            boundary. 
+                                            
+                                            Defaults to `uniform` where 
+                                            the time grid is discretized with a uniform
+                                            mesh. Other strategies include:
+
+                                                `rand`      sample points uniformly randomly
+                                                            from interval [tmin, tmax]
+        """
+        if strategy == "uniform":
+            _tgrid = torch.linspace(self.tmin, self.tmax, n_samples).reshape(-1, 1)
+        elif strategy == "rand":
+            _tgrid = torch.FloatTensor(n_samples).uniform_(self.tmin, self.tmax).reshape(-1, 1)
+        else: 
             raise NotImplementedError()
-        # query advection and diffusion
-        if advection_diffusion_data is None:
-            raise NotImplementedError()
-        else:
-            advection = advection_diffusion_data[:, 0][:, None]
-            diffusion = advection_diffusion_data[:, 1][:, None]
+        # left boundary: repeat `xmin`
+        _xmin = torch.tensor([self.xmin]).repeat(n_samples).reshape(-1, 1)
 
-        # ----------------------------------------------------------------------
-        # PDE Loss
-        # ----------------------------------------------------------------------
-        # predicted solution + forcing term
-        F = outputs.clone()
-        S = self.S_nn(inputs).clone()
+        # right boundary: repeat `xmax`
+        _xmax = torch.tensor([self.xmax]).repeat(n_samples).reshape(-1, 1)
 
-        # partial derivatives
-        dF = self.gradient(F, inputs, order=1)
-        dF2 = self.gradient(F, inputs, order=2)
-        dS = self.gradient(S, inputs, order=1)
+        # concatenate to form grid data
+        _left_inputs = torch.concat(
+            [_tgrid, _xmin], dim=1
+        )
+        _right_inputs = torch.concat(
+            [_tgrid, _xmax], dim=1
+        )
 
-        dFdx = dF[:, 0][:, None]
-        dFdt = dF[:, 1][:, None]
-        dF2dx2 = dF2[:, 0][:, None]
-        dSdx = dS[:, 0][:, None]
-
-        # assemble PDE loss
-        lhs = (dFdt + (1/self.Dgam)*advection*dFdx - diffusion*dF2dx2)
-        rhs = -(self.Dgam**2)*dSdx
-        pde_loss = torch.mean((lhs - rhs)**2)
-
-        # ----------------------------------------------------------------------
-        # Monotinicity Loss at queried points
-        # ----------------------------------------------------------------------
-        #monotonicity_loss = torch.sum(( dFdx[dFdx < 0] )**2)/(self.Nx*self.Nt)
-        monotonicity_loss = torch.sum(( dFdx[dFdx < 0] ).abs())
-
-        return pde_loss, monotonicity_loss
-
-    def data_loss(self, inputs, y_pred, y_true, gamma=0.0, ic_weight=10.0, bc_weight=20.0):
-        """
-            Evaluates data loss, or generalized least squares
-            error (with `gamma`) between model predictions 
-            and Monte Carlo data.
-
-            Deviations on initional condition and boundary conditions 
-            are penalized by weights `ic_weight`, `bc_weight`.
-        """
-        # number of points 
-        b = len(y_pred)
-        # generalized loss
-        if gamma != 0:
-            # need to be careful about 0/0
-            residual = ( (y_pred - y_true)/(torch.abs(F)**gamma) )**2
-        else:
-            residual = (y_pred - y_true)**2
-        
-        initial_data_locations = (inputs[:, 1][:, None] == 0)
-        left_boundary_data_locations = (inputs[:, 0][:, None] == self.xmin)
-        right_boundary_data_locations = (inputs[:, 0][:, None] == self.xmax)
-        # penalize initial condition
-        residual *= torch.where(initial_data_locations, 
-                                ic_weight*torch.ones_like(y_pred), 
-                                torch.ones_like(y_pred))
-        # penalize boundary condition (left boundary)
-        residual *= torch.where(left_boundary_data_locations, 
-                                bc_weight*torch.ones_like(y_pred), 
-                                torch.ones_like(y_pred))
-        # penalize boundary condition (right boundary)
-        residual *= torch.where(right_boundary_data_locations, 
-                                bc_weight*torch.ones_like(y_pred), 
-                                torch.ones_like(y_pred))
-        # categorize different loss terms
-        if len(initial_data_locations) == 0:
-            initial_loss = torch.tensor([0.0])
-        else:
-            initial_loss = torch.sum(residual[initial_data_locations])/b
-        
-        if len(left_boundary_data_locations) == 0:
-            left_boundary_loss = torch.tensor([0.0])
-        else:
-            left_boundary_loss = torch.sum(residual[left_boundary_data_locations])/b
-        
-        if len(right_boundary_data_locations) == 0:
-            right_boundary_loss = torch.tensor(0.0)
-        else:
-            right_boundary_loss = torch.sum(residual[right_boundary_data_locations])/b
-        # total loss on data
-        data_loss = torch.mean(residual)
-        return data_loss, initial_loss, left_boundary_loss, right_boundary_loss
-
+        # evaluate (by default standard least squares loss)
+        _left_loss = torch.mean(
+            self.p_nn(_left_inputs) ** 2
+        )
+        _right_loss = torch.mean(
+            self.p_nn(_right_inputs) ** 2
+        )
+        loss = _left_loss + _right_loss
+        return loss
+    
+    def regularity_loss(self):
+        pass
+    
     def loss(self, y_pred, y_true, randomized=False, weighting=False):
         """ 
             Compute aggregate loss function from a 
@@ -389,17 +377,12 @@ class PhysicsInformedROPDF(nn.Module):
 
             The ordering of losses should be [pde, data, monotonicity]
         """
-        raise NotImplementedError()
-        pde_loss, monotone_loss = self.domain_loss()
-        data_loss, initial_loss, \
-             left_boundary_loss, right_boundary_loss = self.data_loss(y_pred, y_true) 
-        final_loss = pde_loss + data_loss + monotone_loss
-        print(" Total loss = {} | PDE loss = {} | Data loss = {} | M loss = {} ".format(
-                final_loss.item(), pde_loss.item(), data_loss.item(), 
-                monotone_loss.item()
-            ))
-        return final_loss
+        pass
     
+
+######################################################################
+# Training routine
+######################################################################
 def train(
         X, y, 
         model, optim, scheduler,
@@ -549,11 +532,13 @@ def train(
             print("                     D Loss             = {}".format(np.mean(all_batch_losses_data)))
             # post processing
 
+######################################################################
+# Postprocessing, prediction, and model validation. 
+######################################################################
 if __name__ == "__main__":
     # debug
     pinn = PhysicsInformedROCDF(2, 1, Fmc_data_path="/Fqoi.mat")
     X = pinn.pde_data[0]
     y = pinn.fmc_data
-    ########## debugging below
 
     
