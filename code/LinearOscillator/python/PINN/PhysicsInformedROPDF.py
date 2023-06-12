@@ -1,6 +1,13 @@
-# Main driver script for an MLP approximation of 
-# CDF equations with closure. Implemented in PyTorch
+# Main driver script for an MLP approximation of PDF equations with closure. Implemented in PyTorch. 
+# The reduced-order PDF equation is a deterministic advection-diffusion equation of the following form:
+# 
+#           p_t + d_dx ( G(t, x) * p ) = d2_dx2 ( D(t, x) * p)
+# where G, D are respectively drift and diffusion coefficients that are generally depenedent on time. 
 
+
+################################################################################
+# List of imports
+################################################################################
 import torch
 import torch.nn as nn
 import torch.autograd
@@ -16,15 +23,12 @@ import numpy as np
 import scipy
 import scipy.io
 
-# References:
+################################################################################
+# References
+################################################################################
 # - https://github.com/jayroxis/PINNs/blob/master/Burgers%20Equation/Burgers%20Inference%20(PyTorch).ipynb
 # - https://github.com/jlager/BINNs/blob/master/Notebooks/BINNsTraining.ipynb
 ######################################################################
-#
-######################################################################
-
-# !!! convert to row major flattening
-# !!! add random sampling
 
 class DNN(nn.Module):
     # can add dropout
@@ -55,10 +59,10 @@ class DNN(nn.Module):
     def forward(self, x):
         return self.layers(x)
 
-class F_Net(nn.Module):
+class G_Net(nn.Module):
     """ 
         A densely connected neural network surrogate 
-        for the solution of CDF equation with closure
+        for the solution of PDF equation with closure
         approximation.
 
         By default holds a DNN with 2 hidden layers, 
@@ -71,7 +75,7 @@ class F_Net(nn.Module):
     def forward(self, inputs):
         return self.net(inputs)
 
-class S_Net(nn.Module):
+class D_Net(nn.Module):
     """ 
         A densely connected neural network surrogate for 
         the unknown forcing term arising from the Reynolds'
@@ -80,28 +84,24 @@ class S_Net(nn.Module):
         By default, it is a DNN with 1 hidden layer, each of which
         has 32 nodes, and `tanh` activation function.
 
-        This neural net should be designed in such a way that 
-        it is at least first order differentiable in `x`.
     """
     def __init__(self, layers=[2, 32, 1]):
         super(S_Net, self).__init__()
         self.net = DNN(layers)
-        ##
-        # other useful declarations
+
     def forward(self, inputs):
         return self.net(inputs)
 
 ######################################################################
 # PINN
 ######################################################################
-    
-class PhysicsInformedROCDF(nn.Module):
-    def __init__(self, indim, outdim, Fmc_data_path="./Fqoi.mat"):
-        super(PhysicsInformedROCDF, self).__init__()
+class PhysicsInformedROPDF(nn.Module):
+    def __init__(self, indim, outdim, data_path):
+        super(PhysicsInformedROPDF, self).__init__()
         self.indim = indim
         self.outdim = outdim
         # load data
-        self.load_data(path=Fmc_data_path) 
+        self.load_data(data_path) 
 
         # define LED closure data
         self.load_pde_physics()
