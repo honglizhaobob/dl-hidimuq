@@ -209,6 +209,12 @@ class PhysicsInformedROPDF(nn.Module):
         self.nx = len(self.xgrid)
         self.dx = self.xgrid[1]-self.xgrid[0]
 
+        # flattened spatio-temporal grid
+        self.inputs = cartesian_data(self.tgrid, self.xgrid)
+
+        # flattened spatio-temporal grid without boundaries
+        self.inputs_interior = cartesian_data(self.tgrid[1:], self.xgrid[1:-1])
+
         # (low-accuracy) solution from KDE
         self.pmc = self.raw_data["pmc"]
         assert self.pmc.shape[0] == self.nt
@@ -217,8 +223,48 @@ class PhysicsInformedROPDF(nn.Module):
 ######################################################################
 # Loss functions
 ######################################################################
-    def domain_loss(self, inputs, outputs, advection_diffusion_data=None, fresh_samples=False):
-        pass
+    def domain_loss(self, inputs):
+        """
+            Physics loss on the main PDE domain, which is assumed to not include
+            boundaries and initial.
+        """
+        # compute drift
+        g_eval = self.G_nn(inputs)
+
+        # compute diffusion
+        d_eval = self.D_nn(inputs)
+
+        # compute NN PDE solution
+        p = self.p_nn(inputs)
+
+        # time derivative and spatial derivative
+        deriv = self.gradient(
+            p, inputs, order=1
+        )
+        p_dt = deriv[:, 0][:, None]
+        p_dx = deriv[:, 1][:, None]
+
+        # d/dx ( G(t, x) * p )
+        tmp = g_eval * p
+        dGpdx = self.gradient(
+            tmp, inputs, order=1
+        )[:, 1][:, None]
+
+        # d/dx D(t, x)
+        D_dx = self.gradient(
+            d_eval, inputs, order=1
+        )[:, 1][:, None]
+
+        # d2/dx2 ( D(t, x) * p ) = d/dx (d/dx D(t, x) * p + D(t, x) * p_dx)
+        tmp = D_dx * p + d_eval * p_dx
+        dDpdxx = self.gradient(
+            tmp, inputs, order=1
+        )[:, 1][:, None]
+
+        # assemble PDE loss
+        loss = torch.mean( ( p_dt + dGpdx - dDpdxx ) ** 2)
+        return loss
+        
 
     def data_loss(self, inputs, pmc, gamma=0.0, ic_weight=1/4, lbc_weight=1/4, rbc_weight=1/4):
         """
@@ -315,6 +361,36 @@ class PhysicsInformedROPDF(nn.Module):
         residual = torch.mean(residual)
         return residual
     
+    def initial_loss(self, n_samples, p0, strategy="uniform"):
+        """
+            Evaluates PDE loss on the initial condition. The initial condition
+            for the RO-PDF equation must be an evaluable expression.
+        """
+        if strategy == "uniform":
+            _xgrid = torch.linspace(self.xmin, self.xmax, n_samples).reshape(-1, 1)
+        elif strategy == "rand":
+            _xgrid = torch.FloatTensor(n_samples).uniform_(self.xmin, self.xmax).reshape(-1, 1)
+        else:
+            raise NotImplementedError()
+        
+        # evaluate exact 
+        _p0_exact = p0(_xgrid)
+
+        # append time 
+        _t0 = torch.tensor([self.tmin]).repeat(n_samples).reshape(-1, 1)
+        _inputs = torch.concat(
+            [_t0, _xgrid], dim=1
+        )
+
+        # evaluate NN predictions 
+        _p0_nn = self.p_nn(_inputs)
+
+        # compute loss
+        loss = torch.mean(
+            (_p0_nn - _p0_exact) ** 2
+        )
+        return loss
+
     def boundary_loss(self, n_samples, strategy="uniform"):
         """
             Evaluates PDE loss on the boundary. The boundary for the 
@@ -365,20 +441,36 @@ class PhysicsInformedROPDF(nn.Module):
         return loss
     
     def regularity_loss(self):
-        pass
-    
-    def loss(self, y_pred, y_true, randomized=False, weighting=False):
-        """ 
-            Compute aggregate loss function from a 
-            suite of loss functions.
-
-            If loss `weighting` is not `False`, need to input a 
-            vector of weights (not necessarily summing to 1.0).
-
-            The ordering of losses should be [pde, data, monotonicity]
         """
-        pass
-    
+            Computes NN prediction on the stored grid and ensure 
+            mass conservation and non-negativity.
+        """
+        # make prediction on all grid points
+        inputs = self.inputs
+        p_nn_eval = self.p_nn(inputs)
+
+        # reshape back to 2d solution
+        p_nn_eval2d = torch.reshape(
+            p_nn_eval, [self.nx, self.nt]
+        ).T
+        assert p_nn_eval2d.shape[0] == self.nt 
+        assert p_nn_eval2d.shape[1] == self.nx
+
+        # numerically integrate in space
+        int_p_nn_eval2d_dx = torch.trapz(p_nn_eval2d, self.xgrid)
+
+        # evaluate integral loss
+        integral_loss = torch.mean(
+            ( int_p_nn_eval2d_dx - torch.ones_like(int_p_nn_eval2d_dx) ) ** 2
+        )
+
+        # evaluate non-negativity constriant
+        negativity_loss = torch.sum(
+            (1 / (self.nt * self.nx)) * ( p_nn_eval2d[p_nn_eval2d < 0.] ) ** 2
+        )
+
+        loss = integral_loss + negativity_loss
+        return loss
 
 ######################################################################
 # Training routine
@@ -535,10 +627,30 @@ def train(
 ######################################################################
 # Postprocessing, prediction, and model validation. 
 ######################################################################
+
+
+######################################################################
+# Helper methods
+######################################################################
+def cartesian_data(x, y):
+    """
+        Given two 1d arrays of points, return their Carteisan product
+        as a list, assuming column-major flattening.
+    """
+    nx, ny = len(x), len(y)
+    y_mesh, x_mesh = torch.meshgrid(y, x)
+    x_mesh_flat = x_mesh.ravel().reshape(-1, 1)
+    y_mesh_flat = y_mesh.ravel().reshape(-1, 1)
+    res = torch.cat(
+        [x_mesh_flat, y_mesh_flat], dim=1
+    )
+    assert len(res) == nx * ny
+    return res
+
+
+
 if __name__ == "__main__":
     # debug
     pinn = PhysicsInformedROCDF(2, 1, Fmc_data_path="/Fqoi.mat")
     X = pinn.pde_data[0]
     y = pinn.fmc_data
-
-    
