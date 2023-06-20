@@ -42,6 +42,10 @@ import numpy as np
 import scipy
 import scipy.io
 
+# ignore warnings
+import warnings
+warnings.filterwarnings("ignore")
+
 ################################################################################
 # References
 ################################################################################
@@ -197,13 +201,17 @@ class PhysicsInformedROPDF(nn.Module):
         # unpack variables
 
         # PDE domain
-        self.tgrid = self.raw_data["t_grid"].reshape(-1, 1)
+        self.tgrid = self.raw_data["tgrid"].flatten()
+        self.tgrid = torch.tensor(self.tgrid, requires_grad=True)
+
         self.tmin = self.tgrid.min()
         self.tmax = self.tgrid.max()
         self.nt = len(self.tgrid)
         self.dt = self.tgrid[1]-self.tgrid[0]
 
-        self.xgrid = self.raw_data["x_grid"].reshape(-1, 1)
+        self.xgrid = self.raw_data["xgrid"].flatten()
+        self.xgrid = torch.tensor(self.xgrid, requires_grad=True)
+
         self.xmin = self.xgrid.min()
         self.xmax = self.xgrid.max()
         self.nx = len(self.xgrid)
@@ -217,8 +225,15 @@ class PhysicsInformedROPDF(nn.Module):
 
         # (low-accuracy) solution from KDE
         self.pmc = self.raw_data["pmc"]
+
+        # check KDE data has grid shape
         assert self.pmc.shape[0] == self.nt
         assert self.pmc.shape[1] == self.nx
+
+        self.pmc = torch.tensor(self.pmc).T.flatten()
+
+
+        
 
 ######################################################################
 # Loss functions
@@ -266,98 +281,28 @@ class PhysicsInformedROPDF(nn.Module):
         return loss
         
 
-    def data_loss(self, inputs, pmc, gamma=0.0, ic_weight=1/4, lbc_weight=1/4, rbc_weight=1/4):
+    def data_loss(self, inputs, pmc, gamma=0.0):
         """
-            Given `inputs`, and output `pmc`, evaluates neural net
-            solution at `inputs` and compute (generalized) least square
-            loss on the predictions.
-
-            The KDE data is assumed to contain initial condition and 
-            boundary condition. During evaluation, they can be potentially 
-            weighted differently.
-
-            Note that if `self.data_loss()` is used, there will be no need to
-            include `self.boundary_loss()` and `self.initial_loss()`. It is
-            assumed that we are in the data-rich regime whenever `self.data_loss()`
-            is used. 
-
-
-            Inputs:
-                inputs                          Flattened temporal-spatial 
-                                                locations where we have an 
-                                                estimate of the solution.
-                
-                pmc                             Flattened estimate values 
-                                                corresponding locations in `inputs`.
-                
-                gamma                           Generalized least squares exponent,
-                                                defaults to 0.0 (standard LS)
-                
-                ic_weight, bc_weight            Weights of initial condition and 
-                                                boundary condition for final loss sum.
-                                                `interior_weight` = 
-                                                    1.0 - ic_weight - (lbc_weight + rbc_weight)
-
-                                                Defaults to equal weights.  
+            Given `p_pred` and `pmc` at corresponding locations, 
+            compute the (generalized) least-squares loss with parameter
+            `gamma`.  
         """
         n_samples = len(pmc)
-        assert inputs.shape[0] == n_samples
-        assert inputs.shape[1] == 2 # time and 1d space
+        assert n_samples == inputs.shape[0]
+        assert inputs.shape[1] == 2
 
-        # find indices of left boundary, right boundary, initial condition
-        initial_data_locs = (inputs[:, 0][:, None] == self.tmin)
-        left_boundary_data_locs = (inputs[:, 1][:, None] == self.xmin)
-        right_boundary_data_locs = (inputs[:, 1][:, None] == self.xmax)
-        internal_data_locs = torch.logical_not(
-            torch.logical_or(
-                initial_data_locs, 
-                torch.logical_or(
-                    left_boundary_data_locs, 
-                    right_boundary_data_locs
-                )
-            )
-        )
+        # make prediction separately
+        p_pred = self.p_nn(inputs)
 
-        # compute residual 
-        p = self.p_nn(inputs)
         if gamma:
             # generalized least squares (stable division)
             residual = torch.exp(
-                2 * ( torch.log((p - pmc)) - gamma * torch.log(torch.abs(p)) )
+                2 * ( torch.log(torch.abs(p_pred - pmc)) - gamma * torch.log(torch.abs(p_pred)) )
             )
         else:
             # regular least squares
-            residual = (p - pmc) ** 2
+            residual = (p_pred - pmc) ** 2
 
-        # modify weights of different contributions
-
-        # initial condition
-        residual *= torch.where(
-            initial_data_locs,
-            ic_weight * torch.ones_like(residual),
-            torch.ones_like(residual)
-        )
-
-        # left boundary 
-        residual *= torch.where(
-            left_boundary_data_locs,
-            lbc_weight * torch.ones_like(residual),
-            torch.ones_like(residual)
-        )
-
-        # right boundary
-        residual *= torch.where(
-            right_boundary_data_locs,
-            rbc_weight * torch.ones_like(residual),
-            torch.ones_like(residual)
-        )
-
-        # internal
-        residual *= torch.where(
-            internal_data_locs,
-            (1 - ic_weight - (lbc_weight + rbc_weight)) * torch.ones_like(residual),
-            torch.ones_like(residual)
-        )
         residual = torch.mean(residual)
         return residual
     
@@ -476,16 +421,15 @@ class PhysicsInformedROPDF(nn.Module):
 # Training routine
 ######################################################################
 def train(
-        X, y, 
         model, optim, scheduler,
-        batch_size, epochs, 
+        batch_size, epochs=100, 
         early_stopping=None, 
         mode="all",
         shuffle=True,
         batch_print=50
     ):
     """ 
-        Trains a PINN-CDF model using an optimizer.
+        Trains a PINN-PDF model using an optimizer.
 
 
         `X` should contain all queried locations where we
@@ -494,18 +438,22 @@ def train(
 
         Similarly, `y` should be of size (N_pnts x 1) torch.tensor
 
-        Inputs:
-
-        Outputs:
-
     """
+    X = model.inputs
+    y = model.pmc.reshape(-1, 1)
+    assert len(y) == X.shape[0]
+    assert X.shape[1] == 2
+
     # number of samples
     N = X.shape[0]
+
     # determine number of batches
-    num_batches = int(N/batch_size)
+    num_batches = int(N / batch_size)
     all_epoch_losses = []
     for i in range(epochs):
-        print("-------------- Epoch {} ------------ \n".format(i+1))
+        print("------------------------------------------------------------------\n")
+        print("|                      Epoch {}                                  |\n".format(i+1))
+        print("------------------------------------------------------------------\n")
         # turn on training mode
         model.train()
         # randomly shuffle training data before each epoch
@@ -513,8 +461,7 @@ def train(
             # generate permutation indices
             tmp = np.random.permutation(N)
             X, y = X[tmp, :].data, y[tmp, :].data # the `.data` detaches computational graph
-            advection = model.pde_data[1][tmp, :][:, None].data
-            diffusion = model.pde_data[2][tmp, :][:, None].data
+
         # loop over batches
         # ----------------------------------------
         # Define batch-wise variables
@@ -522,12 +469,17 @@ def train(
         all_batch_losses = []
         all_batch_losses_data = []
         all_batch_losses_pde = []
-        all_batch_losses_monotone = []
+        #all_batch_losses_reg = []
         # ----------------------------------------
 
         for idx in range(num_batches):
-            # ----------
-
+            if idx % batch_print == 0:
+                print("| => | Batch {} |\n".format(idx+1))
+            # ----------------------------------------
+            #
+            #           Closure definition
+            #
+            # ----------------------------------------
             # define closure for backpropagation
             def closure():
                 # zero out gradients
@@ -539,73 +491,74 @@ def train(
                     # if last batch
                     end_idx = -1
                 Xb, yb = X[start_idx:end_idx, :].data.clone(), y[start_idx:end_idx, :].data.clone()
-                advection_batch = advection[start_idx:end_idx, :].data.clone()
-                diffusion_batch = diffusion[start_idx:end_idx, :].data.clone()
-                advection_diffusion_data = torch.cat([advection_batch, diffusion_batch], dim=1)
                 
                 # require gradients
                 Xb.requires_grad = True
 
-                # generate a prediction on batch data
-                yb_pred = model.forward(Xb)
-
                 data_loss = None
-                if mode == "data_only" or mode == "all":
+
+                if mode == "all":
                     # ----------------------------------------
-                    # Data loss
-                    # ----------------------------------------
-                    data_loss, initial_loss, \
-                        left_boundary_loss, right_boundar_loss = model.data_loss(Xb, yb_pred, yb)
-                    all_batch_losses_data.append(data_loss.item())
-                    # print and report more granular data loss terms
-                    print_flag = False
-                    if left_boundary_loss.item() != 0 or right_boundar_loss.item() != 0 or initial_loss.item() != 0:
-                        print_flag = True
-                    if print_flag and idx % batch_print == 0:
-                        print("\n <<< Batch = {}, Data Loss Profile >>>".format(idx+1))
-                        print("\n ==============================\n")
-                        print(" -- initial condition = {}".format(initial_loss))
-                        print(" -- left boundary condition = {}".format(left_boundary_loss))
-                        print(" -- right boundary condition = {}".format(right_boundar_loss))
-            
-                pde_loss, m_loss = None, None
-                if mode == "physics_only" or mode == "all":
-                    # ----------------------------------------
-                    # PDE loss + monotonicity loss
+                    #              PDE physics
                     # ----------------------------------------
 
-                    # note that this part of the loss function is
-                    # independent of batch data
-                    pde_loss, m_loss = model.domain_loss(Xb, yb_pred, advection_diffusion_data=advection_diffusion_data)
-                    all_batch_losses_pde.append(pde_loss.item())
-                    all_batch_losses_monotone.append(m_loss.item())
+                    # generate a prediction on batch data
+                    pde_loss = model.domain_loss(Xb)
 
-                if idx % batch_print == 0:
-                    print("      Batch {}, Num Batches = {}          ".format(idx + 1, num_batches))
-                # add up all the loss and printing (!!! perhaps weighted)
-                if mode == "data_only":
-                    train_loss = data_loss
+                    # ----------------------------------------
+                    #              Data loss
+                    # ----------------------------------------
+                    data_loss = model.data_loss(Xb, yb)
+
+
+                elif mode == "data_only":
+                    # no physics enforced
+                    pde_loss = torch.tensor(0.0)
+                    # ----------------------------------------
+                    #              Data loss
+                    # ----------------------------------------
+                    data_loss = model.data_loss(Xb, yb)
+
                 elif mode == "physics_only":
-                    train_loss = pde_loss + m_loss
+                    # ----------------------------------------
+                    #             PDE physics
+                    # ----------------------------------------
+                    pde_loss = model.domain_loss(Xb)
+
+                    # no data regularization enforced
+                    data_loss = torch.tensor(0.0)
+
                 else:
-                    train_loss = 10*data_loss + pde_loss + m_loss
+                    raise NotImplementedError()
+
+                # ----------------------------------------
+                #          Regularity loss
+                # ----------------------------------------
+                # computed separately on entire spatio-temporal grid
+                #reg_loss = model.regularity_loss()        
                 
-                # save loss history
+                # aggregate
+                train_loss = pde_loss + data_loss #+ reg_loss
+                # ----------------------------------------
+                #          Save history
+                # ----------------------------------------
                 all_batch_losses.append(train_loss.item())
+                all_batch_losses_pde.append(pde_loss.item())
+                all_batch_losses_data.append(data_loss.item())
+                #all_batch_losses_reg.append(reg_loss.item())
+
                 # compute backpropagation
                 train_loss.backward()
-                #print(">> PDE loss = {}, M loss = {}, D loss = {}".format(pde_loss.item(), m_loss.item(), data_loss.item()))
                 return train_loss
-
+            
             # ----------
-
-            if scheduler is None:
-                # update model parameters
+            if not scheduler:
+                # if no scheduler, update model parameters directly
                 optim.step(closure=closure)
             else:
                 # step scheduler
                 scheduler.step(closure())
-        
+
         # print epoch statistics
         epoch_loss = np.mean(all_batch_losses)
         # early stopping 
@@ -618,16 +571,14 @@ def train(
         print("------------------------------------------------------------------\n")
         if len(all_batch_losses_pde) > 0:
             print("                     P Loss             = {}".format(np.mean(all_batch_losses_pde)))
-        if len(all_batch_losses_monotone) > 0:
-            print("                     M Loss             = {}".format(np.mean(all_batch_losses_monotone)))
         if len(all_batch_losses_data) > 0:
             print("                     D Loss             = {}".format(np.mean(all_batch_losses_data)))
-            # post processing
+        #if len(all_batch_losses_data) > 0:
+        #    print("                     R Loss             = {}".format(np.mean(all_batch_losses_reg)))
 
 ######################################################################
 # Postprocessing, prediction, and model validation. 
 ######################################################################
-
 
 ######################################################################
 # Helper methods
@@ -638,7 +589,7 @@ def cartesian_data(x, y):
         as a list, assuming column-major flattening.
     """
     nx, ny = len(x), len(y)
-    y_mesh, x_mesh = torch.meshgrid(y, x)
+    y_mesh, x_mesh = torch.meshgrid(y, x, indexing=None)
     x_mesh_flat = x_mesh.ravel().reshape(-1, 1)
     y_mesh_flat = y_mesh.ravel().reshape(-1, 1)
     res = torch.cat(
@@ -646,11 +597,3 @@ def cartesian_data(x, y):
     )
     assert len(res) == nx * ny
     return res
-
-
-
-if __name__ == "__main__":
-    # debug
-    pinn = PhysicsInformedROCDF(2, 1, Fmc_data_path="/Fqoi.mat")
-    X = pinn.pde_data[0]
-    y = pinn.fmc_data

@@ -33,7 +33,7 @@ d = 50;
 u0 = randn(2*d,1);
 tstart = 0.0;
 tend = 10.0;
-dt = 1e-4;
+dt = 2e-3;
 tspan = tstart:dt:tend;
 eta = 1.0;
 % create mass, damping, stiffness matrices
@@ -59,12 +59,13 @@ diffusion = @linear_oscillator_white_noise_diffusion;
 em_stepping.step = @(t, u) euler_maruyama_step(t, u, drift, diffusion, dt, eta, params);
 % generate trajectory
 u_sol = sde_solve(em_stepping);
-plot(u_sol(1:d, :)');
 
-%% Test 3: integrate oscillators with correlated noise and random IC
-clear; clc; rng("default");
+figure(1)
+plot(tspan, u_sol(1:d, :)', "LineWidth", 1.2, "Color", "blue", "LineStyle", "-"); hold on;
 
-d = 100;
+% compare with OU noise 
+rng("default");
+d = 50;
 u0 = randn(3*d,1);
 tstart = 0.0;
 tend = 10.0;
@@ -72,9 +73,9 @@ dt = 2e-3;
 tspan = tstart:dt:tend;
 nt = length(tspan);
 
-eta = 2.0;
+eta = 1.0;
 % define parameters for OU process
-delta = 1e-2;
+delta = 1.0;
 
 
 % create mass, damping, stiffness matrices
@@ -112,18 +113,33 @@ drift = @linear_oscillator_ou_noise_drift;
 diffusion = @linear_oscillator_ou_noise_diffusion;
 em_stepping.step = @(t, u) euler_maruyama_step(t, u, drift, diffusion, dt, eta, params);
 
-% define energy function wrapper
-potential_energy = @(x) energy(x, params.K);
-% compute energy of the system
-v = zeros(nt,1);
-parfor i = 1:nt
-    if mod(i,5)==0
-        disp(i);
-    end
-    v(i) = sde_solve_energy(em_stepping, potential_energy);
-end
+% generate trajectory
+u_sol = sde_solve(em_stepping);
+figure(1);
+plot(tspan, u_sol(1:d, :)', "LineWidth", 1.2, "Color", "red", "LineStyle", "-");
+title("Time Evolution of State Variables");
 
-
+%% Visualize KDE density estimates
+clear; clc; rng("default");
+load("../data/LinearOscillator/OU_noise_energy.mat");
+%%
+figure(1);
+plot(tspan, v_data, "LineWidth", 1.0); grid on;
+axes('Position',[.2 .65 .2 .2])
+box on; 
+plot(xi, v_density(:, 500), "LineWidth", 1.5, "Color", "red"); 
+title("$t = 1.0$", ...
+    "Interpreter", "latex");
+axes('Position',[.41 .65 .2 .2])
+box on; 
+plot(xi, v_density(:, 1250), "LineWidth", 1.5, "Color", "red"); 
+title("$t = 2.5$", ...
+    "Interpreter", "latex");
+axes('Position',[.61 .65 .2 .2])
+box on; 
+plot(xi, v_density(:, 2500), "LineWidth", 1.5, "Color", "red"); 
+title("$t = 5.0$", ...
+    "Interpreter", "latex");
 
 
 
