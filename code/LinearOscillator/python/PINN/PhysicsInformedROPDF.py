@@ -54,15 +54,22 @@ warnings.filterwarnings("ignore")
 ######################################################################
 
 class DNN(nn.Module):
-    # can add dropout
-    def __init__(self, layers):
+    def __init__(
+        self, layers, 
+        activation=torch.nn.ReLU, 
+        last_layer_activation=torch.nn.ReLU
+    ):
+        """ 
+            Custom initialization of neural network layers with the option 
+            of changing the output layer's activation function.
+        """
         super(DNN, self).__init__()
         
         # parameters
         self.depth = len(layers) - 1
         
         # set up layer order dict
-        self.activation = torch.nn.Tanh
+        self.activation = activation
         
         layer_list = list()
         for i in range(self.depth - 1): 
@@ -74,6 +81,11 @@ class DNN(nn.Module):
         layer_list.append(
             ('layer_%d' % (self.depth - 1), torch.nn.Linear(layers[-2], layers[-1]))
         )
+        if last_layer_activation is not None:
+            layer_list.append(
+            ('activation_%d' % (self.depth - 1), last_layer_activation())
+        )
+
         layerDict = OrderedDict(layer_list)
         
         # deploy layers
@@ -88,12 +100,18 @@ class G_Net(nn.Module):
         for the solution of PDF equation with closure
         approximation.
 
-        By default holds a DNN with 2 hidden layers, 
+        By default holds a DNN with 3 hidden layers, 
         each of which has 64 nodes, and `tanh` activation function.
     """
-    def __init__(self, layers=[2, 64, 64, 1]):
+    def __init__(self, layers=[2, 64, 64, 64, 1], activation=torch.nn.Sigmoid):
         super(G_Net, self).__init__()
-        self.net = DNN(layers)
+
+        # no activation used in output layer
+        self.net = DNN(
+            layers, 
+            activation=activation, 
+            last_layer_activation=None
+        )
 
     def forward(self, inputs):
         return self.net(inputs)
@@ -104,13 +122,19 @@ class D_Net(nn.Module):
         the unknown forcing term arising from the Reynolds'
         decomposition. 
 
-        By default, it is a DNN with 1 hidden layer, each of which
+        By default, it is a DNN with 3 hidden layers, each of which
         has 32 nodes, and `tanh` activation function.
 
     """
-    def __init__(self, layers=[2, 32, 1]):
+    def __init__(self, layers=[2, 32, 32, 32, 1], activation=torch.nn.Sigmoid):
         super(D_Net, self).__init__()
-        self.net = DNN(layers)
+
+        # output layer is constrained to be non-negative
+        self.net = DNN(
+            layers, 
+            activation=activation,
+            last_layer_activation=torch.nn.Softplus
+        )
 
     def forward(self, inputs):
         return self.net(inputs)
@@ -120,9 +144,14 @@ class P_Net(nn.Module):
         A densely connected neural network surrogate for the 
         solution for the RO-PDF equation.
     """
-    def __init__(self, layers=[2, 64, 64, 64, 1]):
+    def __init__(self, layers=[2, 128, 128, 128, 1], activation=torch.nn.Sigmoid):
         super(P_Net, self).__init__()
-        self.net = DNN(layers)
+
+        # output layer is constrained to output non-negative values
+        self.net = DNN(
+            layers, activation=activation, 
+            last_layer_activation=torch.nn.Softplus
+        )
     def forward(self, inputs):
         return self.net(inputs)
 
@@ -130,7 +159,10 @@ class P_Net(nn.Module):
 # PINN
 ######################################################################
 class PhysicsInformedROPDF(nn.Module):
-    def __init__(self, indim, outdim, data_path):
+    def __init__(
+        self, indim, outdim, data_path,
+        scheduler=None
+    ):
         super(PhysicsInformedROPDF, self).__init__()
         self.indim = indim
         self.outdim = outdim
@@ -139,19 +171,33 @@ class PhysicsInformedROPDF(nn.Module):
         # initialize NNs
         self.build_models()
         # initialize optimizer
-        self.optimizer = torch.optim.LBFGS(
-            self.parameters(), 
-            lr=2.0, 
-            max_iter=10000, 
-            max_eval=10000, 
-            history_size=30,
-            tolerance_grad=1e-8, 
-            tolerance_change=1e-10,
-            line_search_fn="strong_wolfe"
-        ) # Adam
 
-        # number of samples for evaluating PDE loss
-        self.num_pde_samples = 10000
+        self.optimizer = torch.optim.Adam(
+            self.parameters(),
+            lr=2e-3
+        ) # Adam # try learning rates: 2e-3
+
+        # self.optimizer = torch.optim.LBFGS(
+        #     self.parameters(), 
+        #     lr=1e-1, 
+        #     max_iter=10000, 
+        #     max_eval=10000, 
+        #     history_size=30,
+        #     tolerance_grad=1e-8, 
+        #     tolerance_change=1e-10,
+        #     line_search_fn="strong_wolfe"
+        # ) # L-BFGS
+
+        # scheduler
+        if scheduler:
+            if scheduler == "ExponentialLR":
+                self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.99)
+            elif scheduler == "MultiStepLR":
+                self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[30, 80], gamma=0.1)
+            else:
+                raise NotImplementedError()
+        else:
+            self.scheduler = None
 
     def forward(self, inputs):
         """ 
@@ -173,7 +219,6 @@ class PhysicsInformedROPDF(nn.Module):
             outputs = grads.sum()
         return grads
 
-
     def build_models(self):
         """ Initialize neural nets. """
 
@@ -184,7 +229,7 @@ class PhysicsInformedROPDF(nn.Module):
         # solution neural net
         self.p_nn = P_Net()
 
-    def load_data(self, path):
+    def load_data(self, path, normalize_input=False):
         """
             Loads a low-fidelity kernel density estimate of the density
             at different times.
@@ -202,20 +247,25 @@ class PhysicsInformedROPDF(nn.Module):
 
         # PDE domain
         self.tgrid = self.raw_data["tgrid"].flatten()
-        self.tgrid = torch.tensor(self.tgrid, requires_grad=True)
+        self.xgrid = self.raw_data["xgrid"].flatten()
 
         self.tmin = self.tgrid.min()
         self.tmax = self.tgrid.max()
-        self.nt = len(self.tgrid)
-        self.dt = self.tgrid[1]-self.tgrid[0]
-
-        self.xgrid = self.raw_data["xgrid"].flatten()
-        self.xgrid = torch.tensor(self.xgrid, requires_grad=True)
 
         self.xmin = self.xgrid.min()
         self.xmax = self.xgrid.max()
+
+        # normalize to unit scale
+        if normalize_input:
+            self.xgrid = self.xgrid / self.xmax
+            self.tgrid = self.tgrid / self.tmax
+
+        self.tgrid = torch.tensor(self.tgrid, requires_grad=True)
+        self.xgrid = torch.tensor(self.xgrid, requires_grad=True)
         self.nx = len(self.xgrid)
         self.dx = self.xgrid[1]-self.xgrid[0]
+        self.nt = len(self.tgrid)
+        self.dt = self.tgrid[1]-self.tgrid[0]
 
         # flattened spatio-temporal grid
         self.inputs = cartesian_data(self.tgrid, self.xgrid)
@@ -232,8 +282,6 @@ class PhysicsInformedROPDF(nn.Module):
 
         self.pmc = torch.tensor(self.pmc).T.flatten()
 
-
-        
 
 ######################################################################
 # Loss functions
@@ -385,20 +433,37 @@ class PhysicsInformedROPDF(nn.Module):
         loss = _left_loss + _right_loss
         return loss
     
-    def regularity_loss(self):
+
+    def regularity_loss(self, query_indices=None, n_query=50):
         """
             Computes NN prediction on the stored grid and ensure 
             mass conservation and non-negativity.
+
+            If `query_indices` is `None`, randomly queries time steps
+            to ensure regularity. Otherwise, computes regularity
+            on the `query_indices`.
         """
-        # make prediction on all grid points
-        inputs = self.inputs
+        if query_indices is None and n_query > 0:
+            # make prediction on randomly selected time steps
+            rand_time_idx = np.random.choice(self.nt, n_query)
+            # select inputs 
+            tmp_tgrid = self.tgrid[rand_time_idx]
+            tmp_xgrid = self.xgrid
+            inputs = cartesian_data(tmp_tgrid, tmp_xgrid)
+        else:
+            tmp_tgrid = self.tgrid[query_indices]
+            tmp_xgrid = self.xgrid
+            inputs = cartesian_data(tmp_tgrid, tmp_xgrid)
+
+        tmp_nt = len(query_indices) if query_indices is not None else n_query
+        # evaluate
         p_nn_eval = self.p_nn(inputs)
 
         # reshape back to 2d solution
         p_nn_eval2d = torch.reshape(
-            p_nn_eval, [self.nx, self.nt]
+            p_nn_eval, [self.nx, tmp_nt]
         ).T
-        assert p_nn_eval2d.shape[0] == self.nt 
+        assert p_nn_eval2d.shape[0] == tmp_nt
         assert p_nn_eval2d.shape[1] == self.nx
 
         # numerically integrate in space
@@ -411,7 +476,7 @@ class PhysicsInformedROPDF(nn.Module):
 
         # evaluate non-negativity constriant
         negativity_loss = torch.sum(
-            (1 / (self.nt * self.nx)) * ( p_nn_eval2d[p_nn_eval2d < 0.] ) ** 2
+            (1 / (n_query * self.nx)) * ( p_nn_eval2d[p_nn_eval2d < 0.] ) ** 2
         )
 
         loss = integral_loss + negativity_loss
@@ -431,7 +496,6 @@ def train(
     """ 
         Trains a PINN-PDF model using an optimizer.
 
-
         `X` should contain all queried locations where we
         evaluate the approximation to the solution of the CDF
         equation, `Fnn`, organized as a (N_pnts x 2) torch.tensor
@@ -449,7 +513,11 @@ def train(
 
     # determine number of batches
     num_batches = int(N / batch_size)
-    all_epoch_losses = []
+
+    # epoch-wise losses (averaged over batch)
+    all_epoch_pde_loss = []
+    all_epoch_data_loss = []
+    all_epoch_reg_loss = []
     for i in range(epochs):
         print("------------------------------------------------------------------\n")
         print("|                      Epoch {}                                  |\n".format(i+1))
@@ -469,7 +537,7 @@ def train(
         all_batch_losses = []
         all_batch_losses_data = []
         all_batch_losses_pde = []
-        #all_batch_losses_reg = []
+        all_batch_losses_reg = []
         # ----------------------------------------
 
         for idx in range(num_batches):
@@ -494,8 +562,6 @@ def train(
                 
                 # require gradients
                 Xb.requires_grad = True
-
-                data_loss = None
 
                 if mode == "all":
                     # ----------------------------------------
@@ -534,33 +600,36 @@ def train(
                 # ----------------------------------------
                 #          Regularity loss
                 # ----------------------------------------
-                # computed separately on entire spatio-temporal grid
-                #reg_loss = model.regularity_loss()        
+                # computed separately by querying time points
+                
+                # query on specific points
+                reg_loss = model.regularity_loss(query_indices=np.arange(150))
                 
                 # aggregate
-                train_loss = pde_loss + data_loss #+ reg_loss
+                train_loss = pde_loss + data_loss + reg_loss
+                #train_loss = pde_loss + data_loss
                 # ----------------------------------------
                 #          Save history
                 # ----------------------------------------
-                all_batch_losses.append(train_loss.item())
                 all_batch_losses_pde.append(pde_loss.item())
                 all_batch_losses_data.append(data_loss.item())
-                #all_batch_losses_reg.append(reg_loss.item())
+                all_batch_losses_reg.append(reg_loss.item())
+                all_batch_losses.append(train_loss.item())
 
                 # compute backpropagation
                 train_loss.backward()
                 return train_loss
             
-            # ----------
-            if not scheduler:
-                # if no scheduler, update model parameters directly
-                optim.step(closure=closure)
-            else:
-                # step scheduler
-                scheduler.step(closure())
+            optim.step(closure=closure)
+
+        # ----------
+        if scheduler:
+            # step scheduler after epoch if there is one
+            scheduler.step()
 
         # print epoch statistics
         epoch_loss = np.mean(all_batch_losses)
+
         # early stopping 
         if early_stopping is not None:
             if epoch_loss <= early_stopping:
@@ -570,11 +639,37 @@ def train(
         print("|        Epoch {}, Batch Average Loss = {}                       |\n".format(i+1, epoch_loss))
         print("------------------------------------------------------------------\n")
         if len(all_batch_losses_pde) > 0:
-            print("                     P Loss             = {}".format(np.mean(all_batch_losses_pde)))
+            mean_batch_pde_loss = np.mean(all_batch_losses_pde)
+            print("                     P Loss             = {}".format(mean_batch_pde_loss))
+            # save
+            all_epoch_pde_loss.append(mean_batch_pde_loss)
         if len(all_batch_losses_data) > 0:
-            print("                     D Loss             = {}".format(np.mean(all_batch_losses_data)))
-        #if len(all_batch_losses_data) > 0:
-        #    print("                     R Loss             = {}".format(np.mean(all_batch_losses_reg)))
+            mean_batch_data_loss = np.mean(all_batch_losses_data)
+            print("                     D Loss             = {}".format(mean_batch_data_loss))
+            # save
+            all_epoch_data_loss.append(mean_batch_data_loss)
+
+        if len(all_batch_losses_reg) > 0:
+            mean_batch_reg_loss = np.mean(all_batch_losses_reg)
+            print("                     R Loss             = {}".format(mean_batch_reg_loss))
+            # save
+            all_epoch_reg_loss.append(mean_batch_reg_loss)
+
+    # save info and return 
+    info = {
+        "pde_loss": all_epoch_pde_loss, 
+        "data_loss": all_epoch_data_loss,
+        "reg_loss": all_epoch_reg_loss
+    }
+    return info
+
+######################################################################
+# Physics Informed Normalizing Flow
+######################################################################
+
+
+
+
 
 ######################################################################
 # Postprocessing, prediction, and model validation. 

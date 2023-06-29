@@ -9,9 +9,9 @@ clear; clc; rng("default");
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % number of trials
-nmc = 5e+4;
+nmc = 3e+4;
 % problem dimension
-d = 100;
+d = 50;
 % time grid
 tstart = 0.0;
 tend = 10.0;
@@ -80,10 +80,10 @@ for i = 1:nmc
 end
 
 %% Load data
-load_path = "./data/LinearOscillator/OU_noise_energy.mat";
+load_path = "../data/LinearOscillator/OU_noise_energy.mat";
 load(load_path)
 %% Save data
-save_path = "./data/LinearOscillator/OU_noise_energy.mat";
+save_path = "../data/LinearOscillator/OU_noise_energy.mat";
 save(save_path);
 %% Estimate density of potential
 nx = 2e+3;
@@ -103,7 +103,6 @@ end
 for i = 1:nt
     figure(1);
     plot(xi, v_density(:,i))
-    ylim([0 0.001])
 end
 
 
