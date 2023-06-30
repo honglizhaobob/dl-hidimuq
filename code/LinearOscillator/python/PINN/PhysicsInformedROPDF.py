@@ -103,7 +103,7 @@ class G_Net(nn.Module):
         By default holds a DNN with 3 hidden layers, 
         each of which has 64 nodes, and `tanh` activation function.
     """
-    def __init__(self, layers=[2, 64, 64, 64, 1], activation=torch.nn.Sigmoid):
+    def __init__(self, layers=[2, 64, 64, 64, 1], activation=torch.nn.ReLU):
         super(G_Net, self).__init__()
 
         # no activation used in output layer
@@ -126,7 +126,7 @@ class D_Net(nn.Module):
         has 32 nodes, and `tanh` activation function.
 
     """
-    def __init__(self, layers=[2, 32, 32, 32, 1], activation=torch.nn.Sigmoid):
+    def __init__(self, layers=[2, 32, 32, 32, 1], activation=torch.nn.ReLU):
         super(D_Net, self).__init__()
 
         # output layer is constrained to be non-negative
@@ -144,13 +144,13 @@ class P_Net(nn.Module):
         A densely connected neural network surrogate for the 
         solution for the RO-PDF equation.
     """
-    def __init__(self, layers=[2, 128, 128, 128, 1], activation=torch.nn.Sigmoid):
+    def __init__(self, layers=[2, 128, 128, 128, 1], activation=torch.nn.ReLU):
         super(P_Net, self).__init__()
 
         # output layer is constrained to output non-negative values
         self.net = DNN(
             layers, activation=activation, 
-            last_layer_activation=torch.nn.Softplus
+            last_layer_activation=None
         )
     def forward(self, inputs):
         return self.net(inputs)
@@ -267,21 +267,22 @@ class PhysicsInformedROPDF(nn.Module):
         self.nt = len(self.tgrid)
         self.dt = self.tgrid[1]-self.tgrid[0]
 
-        # flattened spatio-temporal grid
-        self.inputs = cartesian_data(self.tgrid, self.xgrid)
-
         # flattened spatio-temporal grid without boundaries
         self.inputs_interior = cartesian_data(self.tgrid[1:], self.xgrid[1:-1])
 
-        # (low-accuracy) solution from KDE
-        self.pmc = self.raw_data["pmc"]
-
+        # (low-accuracy) solution from KDE only on interior points
+        self.pmc = self.raw_data["pmc"][1:, 1:-1]
         # check KDE data has grid shape
-        assert self.pmc.shape[0] == self.nt
-        assert self.pmc.shape[1] == self.nx
-
+        assert self.pmc.shape[0] == self.nt - 1 # without initial condition
+        assert self.pmc.shape[1] == self.nx - 2 # without 1d boundaries
         self.pmc = torch.tensor(self.pmc).T.flatten()
 
+        # initial condition, specified as an array
+        self.p0 = self.raw_data["pmc"][0, :].flatten()
+        assert abs(1 - np.trapz(self.p0, self.raw_data["xgrid"].flatten())) < 1e-3, \
+                "Initial condition does not integrate to 1. "
+        self.p0 = torch.tensor(self.p0, requires_grad=False)
+    
 
 ######################################################################
 # Loss functions
@@ -354,20 +355,18 @@ class PhysicsInformedROPDF(nn.Module):
         residual = torch.mean(residual)
         return residual
     
-    def initial_loss(self, n_samples, p0, strategy="uniform"):
+    def initial_loss(self, n_samples=500):
         """
-            Evaluates PDE loss on the initial condition. The initial condition
-            for the RO-PDF equation must be an evaluable expression.
+            Evaluates loss on the initial time t = 0 at randomly queried locations
+            on the uniform grid `self.xgrid`. The initial condition is specified 
+            as discrete values. 
         """
-        if strategy == "uniform":
-            _xgrid = torch.linspace(self.xmin, self.xmax, n_samples).reshape(-1, 1)
-        elif strategy == "rand":
-            _xgrid = torch.FloatTensor(n_samples).uniform_(self.xmin, self.xmax).reshape(-1, 1)
-        else:
-            raise NotImplementedError()
-        
-        # evaluate exact 
-        _p0_exact = p0(_xgrid)
+        # sample random values from the spatial grid (possibly with replacements)
+        rand_inds = np.random.choice(self.nx, n_samples)
+        _xgrid = self.xgrid.clone().detach()[rand_inds].reshape(-1, 1)
+
+        # query exact valus
+        _p0_exact = self.p0.clone().detach()[rand_inds]
 
         # append time 
         _t0 = torch.tensor([self.tmin]).repeat(n_samples).reshape(-1, 1)
@@ -384,24 +383,11 @@ class PhysicsInformedROPDF(nn.Module):
         )
         return loss
 
-    def boundary_loss(self, n_samples, strategy="uniform"):
+    def boundary_loss(self, n_samples=500, strategy="uniform"):
         """
             Evaluates PDE loss on the boundary. The boundary for the 
             RO-PDF equation is assumed to be vanishing.
 
-            Inputs:
-                n_samples                   number of spatial locations to query. 
-                                            The effective data size will be 
-                                            `n_samples * self.nt`
-                strategy                    strategy used to generate points on the 
-                                            boundary. 
-                                            
-                                            Defaults to `uniform` where 
-                                            the time grid is discretized with a uniform
-                                            mesh. Other strategies include:
-
-                                                `rand`      sample points uniformly randomly
-                                                            from interval [tmin, tmax]
         """
         if strategy == "uniform":
             _tgrid = torch.linspace(self.tmin, self.tmax, n_samples).reshape(-1, 1)
@@ -503,7 +489,8 @@ def train(
         Similarly, `y` should be of size (N_pnts x 1) torch.tensor
 
     """
-    X = model.inputs
+    # PDE loss is only evaluated at interior points
+    X = model.inputs_interior
     y = model.pmc.reshape(-1, 1)
     assert len(y) == X.shape[0]
     assert X.shape[1] == 2
@@ -518,6 +505,8 @@ def train(
     all_epoch_pde_loss = []
     all_epoch_data_loss = []
     all_epoch_reg_loss = []
+    all_epoch_init_loss = []
+    all_epoch_boundary_loss = []
     for i in range(epochs):
         print("------------------------------------------------------------------\n")
         print("|                      Epoch {}                                  |\n".format(i+1))
@@ -537,6 +526,8 @@ def train(
         all_batch_losses = []
         all_batch_losses_data = []
         all_batch_losses_pde = []
+        all_batch_losses_init = []
+        all_batch_losses_boundary = []
         all_batch_losses_reg = []
         # ----------------------------------------
 
@@ -597,17 +588,30 @@ def train(
                 else:
                     raise NotImplementedError()
 
+                # add initial and boundary value losses if physics was computed
+                if pde_loss != 0:
+                    # add initial and boundary loss
+                    initial_loss = model.initial_loss(n_samples=batch_size//2)
+                    boundary_loss = model.boundary_loss(n_samples=batch_size)
+                else:
+                    initial_loss = torch.tensor(0.0)
+                    boundary_loss = torch.tensor(0.0)
+
                 # ----------------------------------------
                 #          Regularity loss
                 # ----------------------------------------
                 # computed separately by querying time points
                 
                 # query on specific points
-                reg_loss = model.regularity_loss(query_indices=np.arange(150))
+                #reg_loss = model.regularity_loss(query_indices=np.arange(150))
+
+                # query on random points
+                reg_loss = model.regularity_loss(n_query=20)
                 
                 # aggregate
-                train_loss = pde_loss + data_loss + reg_loss
-                #train_loss = pde_loss + data_loss
+                train_loss = (pde_loss + initial_loss + boundary_loss) \
+                                + data_loss 
+                                #+ reg_loss
                 # ----------------------------------------
                 #          Save history
                 # ----------------------------------------
@@ -615,6 +619,9 @@ def train(
                 all_batch_losses_data.append(data_loss.item())
                 all_batch_losses_reg.append(reg_loss.item())
                 all_batch_losses.append(train_loss.item())
+
+                all_batch_losses_init.append(initial_loss.item())
+                all_batch_losses_boundary.append(boundary_loss.item())
 
                 # compute backpropagation
                 train_loss.backward()
@@ -654,20 +661,23 @@ def train(
             print("                     R Loss             = {}".format(mean_batch_reg_loss))
             # save
             all_epoch_reg_loss.append(mean_batch_reg_loss)
+        # save 
+        all_epoch_init_loss.append(np.mean(all_batch_losses_init))
+        all_epoch_boundary_loss.append(np.mean(all_batch_losses_boundary))
 
     # save info and return 
     info = {
         "pde_loss": all_epoch_pde_loss, 
         "data_loss": all_epoch_data_loss,
-        "reg_loss": all_epoch_reg_loss
+        "reg_loss": all_epoch_reg_loss,
+        "init_loss": all_epoch_init_loss,
+        "boundary_loss": all_epoch_boundary_loss
     }
     return info
 
 ######################################################################
 # Physics Informed Normalizing Flow
 ######################################################################
-
-
 
 
 
