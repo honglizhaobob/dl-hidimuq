@@ -103,22 +103,47 @@ class G_Net(nn.Module):
         By default holds a DNN with 3 hidden layers, 
         each of which has 64 nodes, and `tanh` activation function.
     """
-    def __init__(self, layers=[2, 128, 128, 128, 1], activation=torch.nn.Tanh):
+    def __init__(self, layers=[2, 32, 32, 32, 1], activation=torch.nn.Tanh):
         super(G_Net, self).__init__()
 
         # no activation used in output layer
         self.net = DNN(
             layers, 
             activation=activation, 
-            last_layer_activation=None
+            last_layer_activation=torch.nn.Softplus
         )
 
         # testing constant
         self.constant = torch.nn.Parameter(torch.tensor([0.0]))
+
+        # regression data (target)
+        self.regression_data = None
+
     def forward(self, inputs):
         return self.net(
            inputs
         )
+    
+    def load_data(self, path):
+        if not self.regression_data and path is not None:
+            # load target data
+            raw_data = scipy.io.loadmat(path)
+            targ = raw_data["cond_exp"]
+
+            # load input data
+
+        else:
+            raise NotImplementedError()
+    
+    def loss(self, inputs, y_exact):
+        """
+            Regression function on data `y_exact`, makes 
+            prediction using `inputs` and computes a 
+            standard least-squares loss. 
+        """
+        y_pred = self.net(inputs)
+        loss = torch.mean( (y_pred - y_exact) ** 2 )
+        return loss
 
 class D_Net(nn.Module):
     """ 
@@ -143,18 +168,29 @@ class D_Net(nn.Module):
     def forward(self, inputs):
         return self.net(inputs)
 
+    def loss(self, inputs, y_exact):
+        """
+            Regression function on data `y_exact`, makes 
+            prediction using `inputs` and computes a 
+            standard least-squares loss. 
+        """
+        y_pred = self.net(inputs)
+        loss = torch.mean( (y_pred - y_exact) ** 2 )
+        return loss
+
 class P_Net(nn.Module):
     """
         A densely connected neural network surrogate for the 
         solution for the RO-PDF equation.
+
     """
     def __init__(self, layers=[2, 128, 128, 128, 1], activation=torch.nn.ReLU):
         super(P_Net, self).__init__()
 
-        # output layer is constrained to output non-negative values
         self.net = DNN(
             layers, activation=activation, 
-            last_layer_activation=None
+            last_layer_activation=torch.nn.Softplus
+            # None or may choose torch.nn.Softplus to constrain >= 0 solutions.
         )
     def forward(self, inputs):
         return self.net(inputs)
@@ -180,7 +216,7 @@ class PhysicsInformedROPDF(nn.Module):
             # Adam: 
             self.optimizer = torch.optim.Adam(
                 self.parameters(),
-                lr=1e-3
+                lr=2e-3
             )
         elif optimizer == "lbfgs":
             # L-BFGS
@@ -205,11 +241,6 @@ class PhysicsInformedROPDF(nn.Module):
         else:
             self.scheduler = None
 
-
-
-
-
-
     def forward(self, inputs):
         """ 
             Generate approximate PDE solution. Input
@@ -217,10 +248,6 @@ class PhysicsInformedROPDF(nn.Module):
         """
         return self.p_nn(inputs)
     
-
-
-
-
 
     def gradient(self, outputs, inputs, order=1):
         """ 
@@ -261,6 +288,7 @@ class PhysicsInformedROPDF(nn.Module):
             data[`pmc`]                     (Nt x Nx) array containing 
                                             a solution estimate at (t_i, x_j).
         """
+
         self.raw_data = scipy.io.loadmat(path)
         # unpack variables
 
@@ -294,19 +322,26 @@ class PhysicsInformedROPDF(nn.Module):
         # check KDE data has grid shape
         assert self.pmc.shape[0] == self.nt - 1 # without initial condition
         assert self.pmc.shape[1] == self.nx - 2 # without 1d boundaries
+
+        # flatten in column major order to form training data
         self.pmc = torch.tensor(self.pmc).T.flatten()
 
         # initial condition, specified as an array
         self.p0 = self.raw_data["pmc"][0, :].flatten()
-        assert abs(1 - np.trapz(self.p0, self.raw_data["xgrid"].flatten())) < 1e-3, \
-                "Initial condition does not integrate to 1. "
         self.p0 = torch.tensor(self.p0, requires_grad=False)
-    
+
+        # reporting
+        print("------------------------------------------------------------\n")
+        print("=> Data Loaded at: {} \n".format(path))
+        print("----> Total Number of observations = {} \n".format(len(self.pmc)));
+        print("------------------------------------------------------------\n")
+
+
 
 ######################################################################
 # Loss functions
 ######################################################################
-    def domain_loss(self, n_samples=500, mode="advection"):
+    def domain_loss(self, n_samples=2**10, mode="advection", conservative=False):
         """
             Physics loss on the main PDE domain. The input points are 
             generated by random uniform sampling.
@@ -315,15 +350,28 @@ class PhysicsInformedROPDF(nn.Module):
                 1. "advection": only advection term is assumed in the PDE
                 2. "advection_diffusion": includes both advection and diffusion
 
+            `conservative` specifies whether the PDE model is in conservative form.
+
         """
         # uniformly sample inputs
-        inputs = torch.tensor(
+        inputs_t = torch.tensor(
             np.random.uniform(
-                low=[self.tmin, self.tmax], 
-                high=[self.xmin, self.xmax], 
-                size=(n_samples, 2)
+                low=self.tmin, 
+                high=self.tmax, 
+                size=(n_samples, 1)
             ), 
             requires_grad=True
+        )
+        inputs_x = torch.tensor(
+            np.random.uniform(
+                low=self.xmin, 
+                high=self.xmax, 
+                size=(n_samples, 1)
+            ), 
+            requires_grad=True
+        )
+        inputs = torch.cat(
+            [inputs_t, inputs_x], dim=-1
         )
 
         # evaulate NN predictions
@@ -339,15 +387,19 @@ class PhysicsInformedROPDF(nn.Module):
         # predicting advection coefficients
         g_eval = self.G_nn(inputs)
 
-        # d/dx ( G(t, x) * p ) - conservative form
-        # tmp = g_eval * p
-        # dGpdx = self.gradient(
-        #     tmp, inputs, order=1
-        # )[:, 1][:, None]
-        # G(t, x) * dp/dx - non-conservative form
-        dGpdx = g_eval * p_dx
-        
+        if conservative:
+            # d/dx ( G(t, x) * p ) - conservative form
+            tmp = g_eval * p
+            dGpdx = self.gradient(
+                tmp, inputs, order=1
+            )[:, 1][:, None]
+        else:
+            # G(t, x) * dp/dx - non-conservative form
+            dGpdx = g_eval * p_dx
+
+        # add advection contribution
         residual = p_dt + dGpdx
+
         # predicting diffusion coefficients if enabled
         if mode == "advection_diffusion":
             # compute diffusion
@@ -365,7 +417,7 @@ class PhysicsInformedROPDF(nn.Module):
             residual = residual - dDpdxx
 
         # assemble PDE loss
-        loss = torch.mean( ( residual ) ** 2)
+        loss = torch.mean( residual ** 2 )
         return loss
         
 
@@ -385,13 +437,13 @@ class PhysicsInformedROPDF(nn.Module):
         if gamma:
             # generalized least squares (stable division)
             residual = torch.exp(
-                2 * ( torch.log(torch.abs(p_pred - pmc)) - gamma * torch.log(torch.abs(p_pred)) )
+                ( torch.log(torch.abs(p_pred - pmc)) - gamma * torch.log(torch.abs(p_pred)) )
             )
         else:
-            # regular least squares
-            residual = (p_pred - pmc) ** 2
+            # mean-squared loss
+            residual = (p_pred - pmc)
 
-        residual = torch.mean(residual)
+        residual = torch.mean(residual ** 2)
         return residual
     
     def initial_loss(self, n_samples=500):
@@ -458,55 +510,20 @@ class PhysicsInformedROPDF(nn.Module):
         loss = _left_loss + _right_loss
         return loss
     
-
-    def regularity_loss(self, query_indices=None, n_query=50):
+    # helper methods
+    def _boundary_data(self):
         """
-            Computes NN prediction on the stored grid and ensure 
-            mass conservation and non-negativity.
-
-            If `query_indices` is `None`, randomly queries time steps
-            to ensure regularity. Otherwise, computes regularity
-            on the `query_indices`.
+            Helper subroutine to get boundary data in input format, size is 
+            assumed to be (Nt x 2) (left and right boundary for all time points).
         """
-        if query_indices is None and n_query > 0:
-            # make prediction on randomly selected time steps
-            rand_time_idx = np.random.choice(self.nt, n_query)
-            # select inputs 
-            tmp_tgrid = self.tgrid[rand_time_idx]
-            tmp_xgrid = self.xgrid
-            inputs = cartesian_data(tmp_tgrid, tmp_xgrid)
-        else:
-            tmp_tgrid = self.tgrid[query_indices]
-            tmp_xgrid = self.xgrid
-            inputs = cartesian_data(tmp_tgrid, tmp_xgrid)
+        x_grid = np.array([
+            self.xmin, self.xmax
+        ])
+        t_grid = self.tgrid.clone().detach().numpy()
+        boundary_data = cartesian_data(t_grid, x_grid)
+        return boundary_data
 
-        tmp_nt = len(query_indices) if query_indices is not None else n_query
-        # evaluate
-        p_nn_eval = self.p_nn(inputs)
-
-        # reshape back to 2d solution
-        p_nn_eval2d = torch.reshape(
-            p_nn_eval, [self.nx, tmp_nt]
-        ).T
-        assert p_nn_eval2d.shape[0] == tmp_nt
-        assert p_nn_eval2d.shape[1] == self.nx
-
-        # numerically integrate in space
-        int_p_nn_eval2d_dx = torch.trapz(p_nn_eval2d, self.xgrid)
-
-        # evaluate integral loss
-        integral_loss = torch.mean(
-            ( int_p_nn_eval2d_dx - torch.ones_like(int_p_nn_eval2d_dx) ) ** 2
-        )
-
-        # evaluate non-negativity constriant
-        negativity_loss = torch.sum(
-            (1 / (n_query * self.nx)) * ( p_nn_eval2d[p_nn_eval2d < 0.] ) ** 2
-        )
-
-        loss = integral_loss + negativity_loss
-        return loss
-
+    
 ######################################################################
 # Training routine
 ######################################################################
@@ -514,7 +531,7 @@ def train(
         model, optim, scheduler,
         batch_size, epochs=50, 
         early_stopping=None, 
-        mode="all",
+        mode="data_only",
         shuffle=True,
         batch_print=50
     ):
@@ -543,12 +560,9 @@ def train(
     # epoch-wise losses (averaged over batch)
     all_epoch_pde_loss = []
     all_epoch_data_loss = []
-    all_epoch_reg_loss = []
     all_epoch_init_loss = []
     all_epoch_boundary_loss = []
     for i in range(epochs):
-        print(model.G_nn.constant)
-        #print(model.G_nn.constant.grad.norm(2))
         print("------------------------------------------------------------------\n")
         print("|                      Epoch {}                                  |\n".format(i+1))
         print("------------------------------------------------------------------\n")
@@ -558,7 +572,8 @@ def train(
         if shuffle:
             # generate permutation indices
             tmp = np.random.permutation(N)
-            X, y = X[tmp, :].data, y[tmp, :].data # the `.data` detaches computational graph
+            # the `.data` detaches computational graph
+            X, y = X[tmp, :].data.clone(), y[tmp, :].data.clone()
 
         # loop over batches
         # ----------------------------------------
@@ -567,8 +582,6 @@ def train(
         all_batch_losses = []
         all_batch_losses_data = []
         all_batch_losses_pde = []
-        all_batch_losses_init = []
-        all_batch_losses_boundary = []
         all_batch_losses_reg = []
         # ----------------------------------------
 
@@ -608,14 +621,26 @@ def train(
                     # ----------------------------------------
                     data_loss = model.data_loss(Xb, yb)
 
+                    # save loss history
+                    all_batch_losses_pde.append(pde_loss.item())
+                    all_batch_losses_data.append(data_loss.item())
+
+                    # backpropagation
+                    train_loss = pde_loss + data_loss
 
                 elif mode == "data_only":
                     # no physics enforced
-                    pde_loss = torch.tensor(0.0)
+                    
                     # ----------------------------------------
                     #              Data loss
                     # ----------------------------------------
                     data_loss = model.data_loss(Xb, yb)
+
+                    # save loss history
+                    all_batch_losses_data.append(data_loss.item())
+
+                    # backpropagation
+                    train_loss = data_loss
 
                 elif mode == "physics_only":
                     # ----------------------------------------
@@ -624,112 +649,88 @@ def train(
                     pde_loss = model.domain_loss()
 
                     # no data regularization enforced
-                    data_loss = torch.tensor(0.0)
+
+                    # save loss history
+                    all_batch_losses_pde.append(pde_loss.item())
+
+                    # backpropagation
+                    train_loss = pde_loss
 
                 else:
                     raise NotImplementedError()
-
-                # ----------------------------------------
-                #          Regularity loss
-                # ----------------------------------------
-                # computed separately by querying time points
                 
-                # query on random points
-                reg_loss = model.regularity_loss(n_query=20)
-                
-                # aggregate (pde_loss + initial_loss + boundary_loss) + data_loss + reg_loss
-                train_loss = pde_loss + data_loss #+ reg_loss
-
-                # constrain coefficient net
-                
-                # modify Xb so it's only on spatial boundaries
-                Xb2 = Xb.clone()
-                tmp = Xb2.shape[1]
-                for i in range(Xb2.shape[0]):
-                    Xb2[i, 1:tmp//2] = model.xmin
-                    Xb2[i, tmp//2:-1] = model.xmax
-                tmp = torch.mean((model.G_nn(Xb2) - 1.0) ** 2)
-                print("Constraining G_net = {}".format(tmp.item()))
-                train_loss += tmp
-                # ----------------------------------------
-                #          Save history
-                # ----------------------------------------
-                all_batch_losses_pde.append(pde_loss.item())
-                all_batch_losses_data.append(data_loss.item())
-                all_batch_losses_reg.append(reg_loss.item())
-                all_batch_losses.append(train_loss.item())
-
-                #all_batch_losses_init.append(initial_loss.item())
-                #all_batch_losses_boundary.append(boundary_loss.item())
 
                 # compute backpropagation
-
-                
                 train_loss.backward()
                 return train_loss
             
+            # step optimizer training loss
             optim.step(closure=closure)
-
         # ----------
         if scheduler:
             # step scheduler after epoch if there is one
             scheduler.step()
+            print("---------- \n")
+            print("++ Learning rate reduced, now at = {0:0.6f}".format(scheduler.get_lr()[0]))
 
-        # print epoch statistics
-        epoch_loss = np.mean(all_batch_losses)
+        # # print epoch statistics
+        # epoch_loss = np.mean(all_batch_losses)
+        # # early stopping 
+        # if early_stopping is not None:
+        #     if epoch_loss <= early_stopping:
+        #         print("Early stopping ... | Loss(u) | <= {} \n\n".format(early_stopping))
+        #         break
+        # print("------------------------------------------------------------------\n")
+        # print("|        Epoch {}, Batch Average Loss = {}                       |\n".format(i+1, epoch_loss))
+        # print("------------------------------------------------------------------\n")
+        # if len(all_batch_losses_pde) > 0:
+        #     mean_batch_pde_loss = np.mean(all_batch_losses_pde)
+        #     print("                     P Loss             = {}".format(mean_batch_pde_loss))# + mean_batch_init_loss + mean_batch_boundary_loss))
+        #     print("                     |    domain        = {}".format(mean_batch_pde_loss))
+        #     #print("                     |    init          = {}".format(mean_batch_init_loss))
+        #     #print("                     |    bound         = {}".format(mean_batch_boundary_loss))
+        #     # save 
+        #     #all_epoch_init_loss.append(mean_batch_init_loss)
+        #     #all_epoch_boundary_loss.append(mean_batch_boundary_loss)
+        #     all_epoch_pde_loss.append(mean_batch_pde_loss)
+        # if len(all_batch_losses_data) > 0:
+        #     mean_batch_data_loss = np.mean(all_batch_losses_data)
+        #     print("                     D Loss             = {}".format(mean_batch_data_loss))
+        #     # save
+        #     all_epoch_data_loss.append(mean_batch_data_loss)
 
-        # early stopping 
-        if early_stopping is not None:
-            if epoch_loss <= early_stopping:
-                print("Early stopping ... | Loss(u) | <= {} \n\n".format(early_stopping))
-                break
-        print("------------------------------------------------------------------\n")
-        print("|        Epoch {}, Batch Average Loss = {}                       |\n".format(i+1, epoch_loss))
-        print("------------------------------------------------------------------\n")
-        if len(all_batch_losses_pde) > 0:
-            mean_batch_pde_loss = np.mean(all_batch_losses_pde)
-            #mean_batch_init_loss = np.mean(all_batch_losses_init)
-            #mean_batch_boundary_loss = np.mean(all_batch_losses_boundary)
-            print("                     P Loss             = {}".format(mean_batch_pde_loss))# + mean_batch_init_loss + mean_batch_boundary_loss))
-            print("                     |    domain        = {}".format(mean_batch_pde_loss))
-            #print("                     |    init          = {}".format(mean_batch_init_loss))
-            #print("                     |    bound         = {}".format(mean_batch_boundary_loss))
-            # save 
-            #all_epoch_init_loss.append(mean_batch_init_loss)
-            #all_epoch_boundary_loss.append(mean_batch_boundary_loss)
-            all_epoch_pde_loss.append(mean_batch_pde_loss)
-        if len(all_batch_losses_data) > 0:
-            mean_batch_data_loss = np.mean(all_batch_losses_data)
-            print("                     D Loss             = {}".format(mean_batch_data_loss))
-            # save
-            all_epoch_data_loss.append(mean_batch_data_loss)
-
-        if len(all_batch_losses_reg) > 0:
-            mean_batch_reg_loss = np.mean(all_batch_losses_reg)
-            print("                     R Loss             = {}".format(mean_batch_reg_loss))
-            # save
-            all_epoch_reg_loss.append(mean_batch_reg_loss)
+        # if len(all_batch_losses_reg) > 0:
+        #     mean_batch_reg_loss = np.mean(all_batch_losses_reg)
+        #     print("                     R Loss             = {}".format(mean_batch_reg_loss))
+        #     # save
+        #     all_epoch_reg_loss.append(mean_batch_reg_loss)
         
+        if all_batch_losses_pde:
+            mean_batch_pde_loss = np.mean(all_batch_losses_pde)
+            print("Batch PDE Loss = {} \n".format(mean_batch_pde_loss))
+            # save to epoch loss
+            all_epoch_pde_loss.append(mean_batch_pde_loss)
+        if all_batch_losses_data:
+            mean_batch_data_loss = np.mean(all_batch_losses_data)
+            print("Batch Data Loss = {} \n".format(mean_batch_data_loss))
+            # save to epoch loss
+            all_epoch_data_loss.append(mean_batch_data_loss)
 
     # save info and return 
     info = {
         "pde_loss": all_epoch_pde_loss, 
-        "data_loss": all_epoch_data_loss,
-        "reg_loss": all_epoch_reg_loss
-        #"init_loss": all_epoch_init_loss,
-        #"boundary_loss": all_epoch_boundary_loss
+        "data_loss": all_epoch_data_loss
     }
     return info
-
-######################################################################
-# Physics Informed Normalizing Flow
-######################################################################
-
 
 
 ######################################################################
 # Postprocessing, prediction, and model validation. 
 ######################################################################
+
+
+
+
 
 ######################################################################
 # Helper methods

@@ -161,9 +161,9 @@ end
 
 
 %% Estimate density of potential
-nx = 2e+3;
+nx = 5e+3;
 v_density = zeros(nx,nt);
-xi = linspace(0, 4.5e+3, nx);
+xi = linspace(0, 5.5e+3, nx);
 for i = 1:nt
     disp(i)
     % energy will never be negative
@@ -174,10 +174,13 @@ for i = 1:nt
     mass = trapz(xi,v_density(:,i));
     v_density(:,i) = v_density(:,i)./mass;
 end
+%% save density data
+save_path = "../data/LinearOscillator/OU_noise_energy.mat";
+save(save_path);
 %%
 for i = 1:nt
     figure(1);
-    plot(xi, v_density(:,i))
+    plot(xi, v_density(:,i), "LineWidth", 2.5, "Color", "red")
 end
 
 
