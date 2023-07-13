@@ -88,16 +88,16 @@ plot(tspan, squeeze(all_u_paths(:,:,2)), "LineWidth", 1.5);
 figure(1); title("Dim 1: MC = 100 Trajectories", "FontSize", 18);
 figure(2); title("Dim 2: MC = 100 Trajectories", "FontSize", 18);
 
-%% Save data after simulation
+%% Save data after simulation, else load
 save_path = "../data/LinearOscillator/OU_noise_energy.mat";
-save(save_path);
-
-%% Load data when we start afresh
-load_path = "../data/LinearOscillator/OU_noise_energy.mat";
-load(load_path)
-
+if ~isfile(save_path)
+    disp("Saving Data ... ")
+    save(save_path);
+else
+    disp("Data already saved, loading ...")
+    load(save_path)
+end
 %% Simulate paths again to generate data for conditional expectation
-
 % for linear oscillator problem, condition expectation is:
 %   E[ X'*K*Y | v ]
 cond_exp_data = zeros(nmc,nt);
@@ -177,10 +177,46 @@ end
 %% save density data
 save_path = "../data/LinearOscillator/OU_noise_energy.mat";
 save(save_path);
-%%
+%% visualize density
 for i = 1:nt
     figure(1);
-    plot(xi, v_density(:,i), "LineWidth", 2.5, "Color", "red")
+    plot(xi/max(xi), v_density(:,i), "LineWidth", 2.5, "Color", "red")
+    ylim([0.0, 0.04]);
+end
+
+%% visualize log(density)
+for i = 1:nt
+    figure(1);
+    plot(xi, max(log(v_density(:,i)),log(eps)), "LineWidth", 2.5, "Color", "red")
+end
+
+%% visualize CDF
+cumulative_density = zeros(nx, nt);
+for i = 1:nt
+    i
+    cumulative_density(:,i) = cumsum(v_density(:,i))/0.9;
+    
+end
+for i = 1:nt
+    figure(1);
+    plot(xi, cumulative_density(:,i), "LineWidth", 2.5, "Color", "red")
+    ylim([0.95, 1.05])
+end
+
+%% visualize score
+xi2 = xi/1.0;
+% approximate score using central difference
+log_density = log(v_density);
+score = zeros(nx-2, nt);
+dx = xi2(2)-xi2(1);
+for i = 1:nt
+    i
+    score(:,i) = (max(log_density(3:end,i),log(eps))-max(log_density(1:end-2,i),log(eps)))/(2*dx);
+end
+% visualize
+for i = 1:nt
+    figure(1);
+    plot(xi2(2:end-1), score(:,i), "LineWidth", 2.5, "Color", "red")
 end
 
 
