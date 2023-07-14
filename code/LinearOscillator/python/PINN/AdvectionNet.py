@@ -278,7 +278,7 @@ class G_Net(nn.Module):
         By default holds a DNN with 3 hidden layers, 
         each of which has 64 nodes, and `tanh` activation function.
     """
-    def __init__(self, layers=[1, 32, 32, 32, 1], activation=torch.nn.Tanh):
+    def __init__(self, layers=[1, 32, 32, 32, 1], activation=torch.nn.Tanh, mode="space"):
         super(G_Net, self).__init__()
 
         # no activation used in output layer
@@ -294,6 +294,9 @@ class G_Net(nn.Module):
 
         # regression data (target)
         self.regression_data = None
+
+        # whether the net is purely time dependent or purely spatially dependent
+        self.mode = mode
 
     def forward(self, inputs):
         return self.net(
@@ -345,7 +348,8 @@ class P_Net(nn.Module):
 class AdvectionNet(nn.Module):
     def __init__(
         self, indim, outdim, data_path,
-        scheduler=None, optimizer="adam"
+        scheduler=None, optimizer="adam",
+        coef_mode="space"
     ):
         super(AdvectionNet, self).__init__()
         self.indim = indim
@@ -355,7 +359,7 @@ class AdvectionNet(nn.Module):
         self.normalize = False
         self.load_data(data_path) 
         # initialize NNs
-        self.build_models()
+        self.build_models(coef_mode=coef_mode)
         # initialize optimizer
 
         if optimizer == "adam":
@@ -409,12 +413,12 @@ class AdvectionNet(nn.Module):
         return grads
 
 
-    def build_models(self):
+    def build_models(self, coef_mode="space"):
         """ 
             Initialize neural nets. 
         """
         # neural nets for coefficients
-        self.G_nn = G_Net()
+        self.G_nn = G_Net(mode=coef_mode)
 
         # solution neural net
         self.p_nn = P_Net()
@@ -548,17 +552,21 @@ class AdvectionNet(nn.Module):
         p_dt = deriv[:, 0][:, None]
         p_dx = deriv[:, 1][:, None]
 
-        # predicting advection coefficients (as a function of `x`)
-        g_eval = self.G_nn(inputs_x)
+        if self.G_nn.mode == "space":
+            # predicting advection coefficients (as a function of `x`)
+            g_eval = self.G_nn(inputs_x)
+        else:
+            # predicting advection coefficients (as a function of `t`)
+            g_eval = self.G_nn(inputs_t)
 
         if conservative:
-            # d/dx ( G(x) * p ) - conservative form
+            # d/dx ( G * p ) - conservative form
             tmp = g_eval * p
             dGpdx = self.gradient(
                 tmp, inputs, order=1
             )[:, 1][:, None]
         else:
-            # G(t, x) * dp/dx - non-conservative form
+            # G * dp/dx - non-conservative form
             dGpdx = g_eval * p_dx
 
         # need to rescale advection if we scaled the inputs, only correct in conservative form
