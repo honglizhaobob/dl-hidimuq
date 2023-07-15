@@ -278,7 +278,7 @@ class G_Net(nn.Module):
         By default holds a DNN with 3 hidden layers, 
         each of which has 64 nodes, and `tanh` activation function.
     """
-    def __init__(self, layers=[1, 32, 32, 32, 1], activation=torch.nn.Tanh, mode="space"):
+    def __init__(self, layers=[1, 64, 64, 1], activation=torch.nn.ReLU, mode="space"):
         super(G_Net, self).__init__()
 
         # no activation used in output layer
@@ -366,7 +366,7 @@ class AdvectionNet(nn.Module):
             # Adam: 
             self.optimizer = torch.optim.Adam(
                 self.parameters(),
-                lr=1e-3
+                lr=1e-4
             )
         elif optimizer == "lbfgs":
             # L-BFGS
