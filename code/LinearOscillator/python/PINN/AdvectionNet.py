@@ -5,7 +5,7 @@
 # with zero Dirichlet boundary.
 # where G(x) is approximated using a spatially dependent neural network. 
 #
-# The order of input for the NN solution is assumed to be: p_nn(t_i, x_j) and data ordering
+# The order of input for the NN solutions are assumed to be: p_nn(t_i, x_j) and data ordering
 # will always be assumed as (column major order):
 #               [t_0, x_0]              => p_nn(0, 0)
 #               [t_1, x_0]              => p_nn(1, 0)
