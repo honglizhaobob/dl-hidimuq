@@ -269,6 +269,117 @@ class DNN(nn.Module):
     def forward(self, x):
         return self.layers(x)
 
+class FourierEmbeddedDNN(torch.nn.Module):
+    def __init__(self, 
+                 layers, 
+                 activation=torch.nn.Tanh, 
+                 last_layer_activation=None, 
+                 initialization=None,
+                 m=1,
+                 freq_stds=None):
+        super(FourierEmbeddedDNN, self).__init__()
+        # fourier embedding is applied prior to passing into neural net, 
+        # need to make sure dimensions match
+        assert layers[0] == 2*m
+        # build main DNN
+        self.layer_spec = layers
+        self.layers = self.build_nn(
+            layers, activation, last_layer_activation, initialization
+        )
+        # build fourier feature embedding
+        self.fourier_embedding = self.build_embedding(m, freq_stds)
+        
+        # build final aggregator to combine outputs of different scale fourier embeddings
+        self.build_aggregator()
+    
+    def build_nn(self, layers, activation, last_layer_activation, initialization):
+        self.depth = len(layers) - 1
+        # set up layer order dict
+        self.activation = activation
+        
+        layer_list = list()
+        for i in range(self.depth - 1): 
+            layer_list.append(
+                ('layer_%d' % i, torch.nn.Linear(layers[i], layers[i+1]))
+            )
+            layer_list.append(('activation_%d' % i, self.activation()))
+            
+        layer_list.append(
+            ('layer_%d' % (self.depth - 1), torch.nn.Linear(layers[-2], layers[-1]))
+        )
+        if last_layer_activation is not None:
+            layer_list.append(
+            ('activation_%d' % (self.depth - 1), last_layer_activation())
+        )
+
+        layerDict = OrderedDict(layer_list)
+        return torch.nn.Sequential(layerDict)
+    
+    def build_embedding(self, num_freqs, freq_stds):
+        # number of feature embeddings correspond to length of standard 
+        # deviations specified. If `None`, by default uses only 1 embedding
+        # standard Gaussian.
+        if freq_stds:
+            self.num_embeddings = len(freq_stds)
+        else:
+            self.num_embeddings = 1
+            freq_stds = [1.0]
+        # draw frequency matrix
+        freq_matrix = [torch.randn(num_freqs, requires_grad=False) for _ in range(self.num_embeddings)]
+        for i in range(self.num_embeddings):
+            # scale by frequency standard deviation
+            freq_matrix[i] = torch.tensor(freq_stds[i])*freq_matrix[i]
+        return freq_matrix
+    
+    def build_aggregator(self):
+        # number of fourier embeddings
+        k = self.num_embeddings
+        # size of hidden layer final outputs
+        num_out = self.layer_spec[-1]
+        # create trainable aggregating weights for each embedding (simple linear aggregation
+        # , may also consider computing another nonlinear activation for each embedding, then 
+        # summing all outputs).
+        self.aggregator = torch.nn.Linear(num_out*k, 1)
+        
+    def fourier_lifting(self, x, freq):
+        # input x has size (N x 1), output has size (N x 2*m) where m is number of Fourier bases
+        
+        # has size (N x m)
+        x = freq * x
+        # lift to sin and cos space
+        x = torch.concat(
+            [
+                torch.cos(2*torch.pi*x), 
+                torch.sin(2*torch.pi*x)
+            ], dim=1
+        )
+        return x
+    
+    def forward(self, x):
+        # inputs x has size (N x 1)
+        # create Fourier features
+        lifted = []
+        for i in range(self.num_embeddings):
+            lifted.append(self.fourier_lifting(x, self.fourier_embedding[i]))
+        # lifted is a length-k list of (N x 2*m) tensors of lifted features according to 
+        # k different scales.
+        
+        # now pass each (N x 2*m) features into the hidden layers
+        for i in range(self.num_embeddings):
+            lifted[i] = self.layers(lifted[i])
+        
+        # lifted is a length-k list of (N x num_out) tensor of transformed fourier features
+        # now concatenate into (N x num_out*k) and pass into aggregator to obtain (N x 1) prediction
+        lifted = torch.concat(lifted, dim=1)
+        # final aggregation
+        lifted = self.aggregator(lifted)
+        return lifted
+
+
+######################################################################
+# PDE solution and coefficient neural nets
+######################################################################
+
 class G_Net(nn.Module):
     """ 
         A densely connected neural network surrogate 
@@ -278,16 +389,23 @@ class G_Net(nn.Module):
         By default holds a DNN with 3 hidden layers, 
         each of which has 64 nodes, and `tanh` activation function.
     """
-    def __init__(self, layers=[1, 64, 64, 1], activation=torch.nn.ReLU, mode="space"):
+    def __init__(self, layers=[30, 128, 128, 128, 1], activation=torch.nn.ReLU, mode="space"):
         super(G_Net, self).__init__()
 
         # no activation used in output layer
-        self.net = DNN(
-            layers, 
-            activation=activation, 
-            last_layer_activation=None
-            #last_layer_activation=torch.nn.Softplus
+        self.net = FourierEmbeddedDNN(
+            layers,
+            activation=activation,
+            last_layer_activation=None,
+            m=15,
+            freq_stds=[1., 2., 5., 10., 20., 50., 100.]
         )
+        # self.net = DNN(
+        #     layers, 
+        #     activation=activation, 
+        #     last_layer_activation=None
+        #     #last_layer_activation=torch.nn.Softplus
+        # )
 
         # testing constant
         self.constant = torch.nn.Parameter(torch.tensor([0.05]))
