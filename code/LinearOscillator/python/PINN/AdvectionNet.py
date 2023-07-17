@@ -389,23 +389,23 @@ class G_Net(nn.Module):
         By default holds a DNN with 3 hidden layers, 
         each of which has 64 nodes, and `tanh` activation function.
     """
-    def __init__(self, layers=[30, 128, 128, 128, 1], activation=torch.nn.ReLU, mode="space"):
+    def __init__(self, layers=[1, 128, 128, 128, 1], activation=torch.nn.ReLU, mode="space"):
         super(G_Net, self).__init__()
 
         # no activation used in output layer
-        self.net = FourierEmbeddedDNN(
-            layers,
-            activation=activation,
-            last_layer_activation=None,
-            m=15,
-            freq_stds=[1., 2., 5., 10., 20., 50., 100.]
-        )
-        # self.net = DNN(
-        #     layers, 
-        #     activation=activation, 
-        #     last_layer_activation=None
-        #     #last_layer_activation=torch.nn.Softplus
+        # self.net = FourierEmbeddedDNN(
+        #     layers,
+        #     activation=activation,
+        #     last_layer_activation=None,
+        #     m=15,
+        #     freq_stds=[1., 2., 5., 10., 20., 50., 100.]
         # )
+        self.net = DNN(
+            layers, 
+            activation=activation, 
+            last_layer_activation=None
+            #last_layer_activation=torch.nn.Softplus
+        )
 
         # testing constant
         self.constant = torch.nn.Parameter(torch.tensor([0.05]))
