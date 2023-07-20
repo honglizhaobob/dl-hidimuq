@@ -46,7 +46,7 @@ class DNN(torch.nn.Module):
         super(DNN, self).__init__()
         
         # parameters
-        self.depth = len(layers) - 1
+        self.depth = len(layers) - 2
         
         # set up layer order dict
         self.activation = activation
@@ -128,7 +128,7 @@ class FourierEmbeddedDNN(torch.nn.Module):
         self.build_aggregator()
     
     def build_nn(self, layers, activation, last_layer_activation, initialization):
-        self.depth = len(layers)
+        self.depth = len(layers)-2
         # set up layer order dict
         self.activation = activation
         
@@ -219,6 +219,8 @@ class FourierEmbeddedDNN2d(torch.nn.Module):
         two separate Fourier embedded nets together and combining the results.
 
         The spatial and temporal Fourier mappings share the same DNN for hidden transformations.
+
+        Currently has bug.
     """
     def __init__(
         self, 
@@ -492,9 +494,71 @@ class FourierProductEmbeddedDNN2d(torch.nn.Module):
         The difference of this architecture from `FourierEmbeddedDNN2d` is that we use 
         separate deep neural networks to lift the spatial and temporal dimensions.
 
-        This architecture products users the option of whether or not to transform
-        time or spatial dimension. 
+        This architecture is a naive extension to the 1d `FourierEmbeddedDNN` architecture.
+        Feature liftings are computed separately (if at all), and result is combined 
+        using an aggregator.
     """
+    def __init__(self, layers_time, layers_space, activation, last_layer_activation, mt, mx, freq_stds_t, freq_stds_x):
+        super(FourierProductEmbeddedDNN2d, self).__init__()
+        assert layers_time[-1] == layers_space[-1]
+        self.num_out = layers_time[-1]
+        # temporal neural net with Fourier features
+        self.fourier_net_t = FourierEmbeddedDNN(layers_time, activation, last_layer_activation, m=mt, freq_stds=freq_stds_t)
+        # spatial neural net with Fourier features
+        self.fourier_net_x = FourierEmbeddedDNN(layers_space, activation, last_layer_activation, m=mx, freq_stds=freq_stds_x)
+        # aggregator 
+        self.aggregator = self.build_aggregator()
+    
+    def build_aggregator(self):
+        k = self.fourier_net_t.num_embeddings*self.fourier_net_x.num_embeddings
+        aggregator = torch.nn.Linear(self.num_out*k, 1)
+        return aggregator
+
+    def forward(self, inputs):
+        """
+            Inputs has size (n x 2), outputs has size (n x 1)
+        """
+        # unpack inputs
+        t = inputs[:, 0][:, None]
+        x = inputs[:, 1][:, None]
+
+        # compute Fourier features separately
+        lifted_t = []
+        for i in range(self.fourier_net_t.num_embeddings):
+            lifted_t.append(self.fourier_net_t.fourier_lifting(t, self.fourier_net_t.fourier_embedding[i]))
+        lifted_x = []
+        for i in range(self.fourier_net_x.num_embeddings):
+            lifted_x.append(self.fourier_net_x.fourier_lifting(x, self.fourier_net_x.fourier_embedding[i]))
+        
+        # lifted_t: length-k_t list of (n x 2*(mt)) tensors of lifted featuers according to k_t different scales
+        # lifted_x: length-k_x list of (n x 2*(mx)) tensors of lifted features according to k_x different scales
+
+        # pass all liftings to separate neural nets
+        for i in range(self.fourier_net_t.num_embeddings):
+            lifted_t[i] = self.fourier_net_t.layers(lifted_t[i])
+        for i in range(self.fourier_net_x.num_embeddings):
+            lifted_x[i] = self.fourier_net_x.layers(lifted_x[i])
+        
+        # lifted_t: length-k_t list of time multiscale features, size (n x num_out_t)
+        # lifted_x: length-k_x list of space multiscale features, size (n x num_out_x)
+        
+        # currently only supporting num_out_t == num_out_x
+        assert lifted_t[0].shape[1] == lifted_x[0].shape[1]
+        lifted = []
+        for i in range(len(lifted_t)):
+            for j in range(len(lifted_x)):
+                lifted.append(torch.mul(lifted_t[i], lifted_x[j]))
+        # lifted: length-(k_t*k_x) list of time-space convolved features, size (n x num_out)
+        lifted = torch.concat(lifted, dim=1)
+        # final aggregation
+        lifted = self.aggregator(lifted)
+        return lifted
+
+
+
+            
+
+    
 
 ####################################################################################################
 # Helper functions for neural nets
