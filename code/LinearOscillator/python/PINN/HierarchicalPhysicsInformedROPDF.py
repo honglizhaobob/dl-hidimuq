@@ -58,8 +58,77 @@ class G_Net(FourierProductEmbeddedDNN2d):
 ######################################################################
 class HierarchicalPhysicsInformedROPDF(nn.Module):
     def __init__(
-        self, indim, outdim, data_path,
-        scheduler=None, optimizer="adam"
+        self, coeff_net_spec
     ):
         super(HierarchicalPhysicsInformedROPDF, self).__init__()
+        # start with an empty neural net group
+        self.model_group = []
+        # number of levels
+        self.num_levels = 0
+        # build coeffient neural net
+        self.r_model = self.build_coefficient_net(coeff_net_spec)
+        # build model aggregation
+        self.aggregator = None
+    
+    def add_model(self, model):
+        # adds a neural net into the model group for ensemble prediction
+        self.model_group.append(model)
+        # update number of levels
+        self.num_levels = len(self.model_group)
+    
+    def build_coefficient_net(self, spec):
+        pass
+
+    def build_aggregator(self):
+        if self.num_levels == 0:
+            raise ValueError("No dimensions to aggregate, add models first. ")
+        return torch.nn.Linear(self.num_levels, 1)
+
+    def freeze(self, net):
+        # stops a net from accumulating gradients
+        # https://stackoverflow.com/questions/68377722/in-pytorch-model-training-how-to-freeze-unfreeze-and-freeze-again-some-params
+        # https://blog.csdn.net/m0_46653437/article/details/112651078
+        net.requires_grad_(False)
+
+    def unfreeze(self, net):
+        # enable training again for the input net
+        net.requires_grad_(True)
+
+    
+    def forward(self, inputs):
+        if self.num_levels == 0:
+            raise ValueError()
+        if self.aggregator is None:
+            raise ValueError("Aggregator not initialized. ")
+        # linear combination of all levels
+        n = inputs.shape[0]
+        assert inputs.shape[1] == 2
+        assert len(self.model_group) == self.num_levels
+        res = torch.zeros(n, self.num_levels)
+        for i in range(self.num_levels):
+            res[:, i] = self.model_group[i](inputs)
+        # pass through aggregator
+        res = self.aggregator(res)
+        return res
+
+
+    # level dependent loss functions (requires freeze and unfreeze)
+    def physics_loss(self, inputs, level):
+        pass
+
+    def data_loss(self, inputs, level):
+        pass
+
+    # train this model
+    def train(self, X, y, loss, optim, scheduler):
+        """
+            Loss function is an input as it changes by level, furthermore,
+            `optim` and `scheduler` options are provided in case one would 
+            like to use different optimizers for each level. 
+        """
+        pass
+
+
+
+
         
