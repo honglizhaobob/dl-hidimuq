@@ -141,6 +141,8 @@ plot(xi, v_density(:, 2500), "LineWidth", 1.5, "Color", "red");
 title("$t = 5.0$", ...
     "Interpreter", "latex");
 
+%% Visualize velocity by tracking the mean
+
 
 
 

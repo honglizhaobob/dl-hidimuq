@@ -62,7 +62,6 @@ from PINN.utils.helpers import cartesian_data
 class LinearAdvection1d:
     """
         Implements the upwind scheme: https://peymandavvalo.github.io/linear_1d_advection_equation.html
-
     """
     def __init__(self, v, tgrid, xgrid):
         self.tgrid = tgrid
@@ -226,8 +225,6 @@ class LaxWendroffConservativeAdvection1d:
 
 
 ################################################################################
-
-
 class DNN(nn.Module):
     def __init__(
         self, layers, 
@@ -379,7 +376,6 @@ class FourierEmbeddedDNN(torch.nn.Module):
 ######################################################################
 # PDE solution and coefficient neural nets
 ######################################################################
-
 class G_Net(nn.Module):
     """ 
         A densely connected neural network surrogate 
@@ -392,14 +388,6 @@ class G_Net(nn.Module):
     def __init__(self, layers=[1, 128, 128, 128, 1], activation=torch.nn.ReLU, mode="space"):
         super(G_Net, self).__init__()
 
-        # no activation used in output layer
-        # self.net = FourierEmbeddedDNN(
-        #     layers,
-        #     activation=activation,
-        #     last_layer_activation=None,
-        #     m=15,
-        #     freq_stds=[1., 2., 5., 10., 20., 50., 100.]
-        # )
         self.net = DNN(
             layers, 
             activation=activation, 
@@ -727,11 +715,11 @@ class AdvectionNet(nn.Module):
 ######################################################################
 # Training routine
 ######################################################################
-def train(
+def train_pinn(
         model, optim, scheduler,
         batch_size, epochs=50, 
         early_stopping=None, 
-        mode="data_only",
+        mode="all",
         shuffle=True,
         batch_print=50,
         conservative_pde=False
