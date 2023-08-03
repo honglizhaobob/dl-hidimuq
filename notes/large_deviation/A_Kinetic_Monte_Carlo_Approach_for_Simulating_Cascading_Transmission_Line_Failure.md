@@ -14,9 +14,7 @@ $$\dot{x_t} = -K\nabla\mathcal{H}^y(x_t), x_0 = \overline{x}$$, where $\mathcal{
 
 * Additive stochastic perturbations to active and reactive power, yielding the stochastic port-Hamiltonian (pH) model:
 $$dx_t^{\tau} = (J-S)\nabla\mathcal{H}(x_t^{\tau}) + \sqrt{2\tau}\cdot S^{1/2}dW_t$$.
-
-
-
+	- We are interested in the event when the line energy $\Theta_l(x)$, exceeds a safety threshold (a constant): $\Theta_l^{\text{max}}$. Paper simulates this event as the first exit time, i.e., simulate the process $x_t^{\tau}$, kill the process once its energy has hit the boundary of the event. 
 
 
 
