@@ -19,10 +19,16 @@ $$dx_t^{\tau} = (J-S)\nabla\mathcal{H}(x_t^{\tau}) + \sqrt{2\tau}\cdot S^{1/2}dW
 	- equation (2.13) shows the mean first exit time is of order $\exp(V(\overline{x},x^\*)/\tau)$ where $x^\*$ can be solved by the following nonlinear program:
 $$x^* = \text{argmin}_{x\in \partial D_l}\mathcal{H}(x)$$.
 
+* Kinetic Monte Carlo: event-based simulation of the stochastic dynamical systems with computational time independent of temperature $\tau$ (advantage: numerical integration of the high dimensional system is expensive at low temp.)
+	- simulations carried out using depth-first search to traverse "likely" failing edges in the connectivity graph. The likelihood is based on unconditional failure rates, which paper argues is a sufficient approximation under the assumption that <u>cascading failure is rare</u>, though conditional failure rate is more precise. 
+
 Limitations
 ---
 * Small noise regime, low temperature
 * Did not solve conditional failure problem, which is of practical interest, as well as the **conditional exit rate**.
+	- Section 3.1 explored the approximation of conditional failure rate using unconditional ones
+	
+	
 
 
 
