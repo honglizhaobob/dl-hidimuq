@@ -19,6 +19,10 @@ $$dx_t^{\tau} = (J-S)\nabla\mathcal{H}(x_t^{\tau}) + \sqrt{2\tau}\cdot S^{1/2}dW
 	- equation (2.13) shows the mean first exit time is of order $\exp(V(\overline{x},x^\*)/\tau)$ where $x^\*$ can be solved by the following nonlinear program:
 $$x^* = \text{argmin}_{x\in \partial D_l}\mathcal{H}(x)$$.
 
+Limitations
+---
+* Small noise regime, low temperature
+* Did not solve conditional failure problem, which is of practical interest, as well as the **conditional exit rate**.
 
 
 
