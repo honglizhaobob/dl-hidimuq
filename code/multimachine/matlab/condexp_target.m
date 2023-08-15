@@ -9,6 +9,5 @@ function res = condexp_target(b, i, j, x, wr)
     % )
     assert(mod(length(x),4)==0);
     [v,w,delta,~] = split_vector(x);
-    res = 2*(b(i,j)^2)*( (v(i)-v(j)*cos(delta(i)-delta(j)))*(w(i)-wr) + ...
-        (v(j)-v(i)*cos(delta(i)-delta(j)))*(w(j)-wr) );
+    res = 2*(b(i,j)^2)*v(i)*v(j)*sin(delta(i)-delta(j))*(w(i)-w(j));
 end

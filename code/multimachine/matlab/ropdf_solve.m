@@ -13,6 +13,7 @@ run("./matpower7.1/startup.m");
 if success ~= 1
     error('runpf_edited to not run successfully')
 end
+
 % MatPower outputs values for the system in equilibrium:
 % Pm = vector of bus power injections
 % g = admittance matrix for cosine (generators)
@@ -30,7 +31,7 @@ R = 0.02;              % Droop
 T1 = 0;                % Transient gain time
 T2 = 0.1;              % Governor time constant
 
-mc = 1000;             % Number of MC paths
+mc = 5000;             % Number of MC paths
 tf = 50.0;               % final time for simulation
 dt = 0.01;             % learn PDE coefficients in increments of dt
 time = 0:dt:tf;        % coarse uniform time grid
@@ -43,6 +44,11 @@ dt0 = 1e-2;            % time step for SDE --> must divide dt
 if mod(dt,dt0)~=0
     error('dt0 does not divide dt')
 end
+
+%% Manually remove a line
+% need to figure out how to remove a line ... proceeding without manual
+% removal
+
 %% Sanity check: simulate deterministic equations with optimal initial conditions
 % initial condition
 x0 = zeros(3*n,1);
@@ -86,7 +92,7 @@ mu_w = 1; sd_w = 0.1;
 u0_w = sd_w*randn(mc,n) + mu_w;
 
 % Random Initial angles Gaussian
-sd_d = 5.0 * pi/180.0; % sd_d = 10.0 degrees, mean around optimal d0
+sd_d = 10.0 * pi/180.0; % sd_d = 10.0 degrees, mean around optimal d0
 u0_d = sd_d*randn(mc,n) + reshape(d0,1,[]);
 
 % Random voltages . (folded gaussian, mean at optimal vi)
@@ -94,12 +100,12 @@ sd_v = mean(vi)*0.01;
 v = abs(sd_v*randn(mc,n) + reshape(vi,1,[]));
 
 % Random initial conditions for OU noise
-theta = 0.05;                % drift parameter
+theta = 1.0;                % drift parameter
 alpha = 0.05;               % diffusion parameter
 
 % define covariance matrix
 case_number = 9;
-mode = "id";
+mode = "const";
 reactance_mat = [];
 susceptance_mat = [];
 R = cov_model(case_number, mode, reactance_mat, susceptance_mat);
@@ -117,7 +123,8 @@ tic
 %(3*N x nt x mc)
 paths_mc = classical_mc(mc,dt,nt,u0,alpha,theta,C,H,D,Pm,wr,g,b);
 toc
-
+%% Save data
+save("./data/case9_mc.mat");
 %% Visualize Monte Carlo data
 close all
 tt = time';
@@ -179,7 +186,7 @@ xlim([0 tt(end)])
 %% Compute energy for a specific line
 from_line = 8;
 to_line = 9;
-assert(b(from_line,to_line)>0.0);
+assert(b(from_line,to_line)~=0.0 | g(from_line,to_line)~=0.0);
 
 % compute energy for each Monte Carlo trial at each time point
 mc_energy = zeros(mc,nt);
@@ -205,134 +212,64 @@ for i = 1:nt
     histogram(mc_condexp_target(:,i),100);
 end
 
-%% Kernel density estimation for energy
-for i = 1:nt
-    [f,xi] = ksdensity(mc_energy(:,i),'Support','positive','BoundaryCorrection','reflection');
-    figure(1);
-    plot(xi,f,"LineWidth",2.5,"Color","red");
-    xlim([0 max(max(mc_energy))]);
-    ylim([0 10]);
-end
-
-%% Visualize scatter plots of conditional expectation data
-n_energy_discretization = 1000;
-energy_grid = linspace(0, max(max(mc_energy))-950, n_energy_discretization);
-for idx = 1:nt
-    figure(1);
-    h = scatter(mc_energy(:,idx),mc_condexp_target(:,idx),...
-        "MarkerEdgeColor","red");
-    h.SizeData = 2;
-    % visualize a fitted spline
-    fitted_curve = csaps(mc_energy(:,i),mc_condexp_target(:,i),0.1,energy_grid);
-    hold on;
-    plot(energy_grid, fitted_curve, "Color", "black", "LineWidth", 2.0);
-    xlim([0, max(max(mc_energy))]);
-    hold off;
-    pause(0.1);
-end
-
-
-
 %% Learn coffcients & solve 1d marginal PDE via lax-wendroff
 close all; 
 rng('default');
-% tic
 
-% Currently solves PDE for marginal PDF of a single fixed oscillator
-
-osc = 5;     % which marginal (oscillator) we want 1<=osc<=N
-
-% Choose angle or velocity marginal pdf for osc
-%   = "angle" (delta_i)
-%   = "velocity" (w_i)
-state = "velocity";
-
-% choose with method for coefficient learning
-%   = "llr" for Loc. Lin. (Gaussian) kernel smoothing regress. w/ 10-fold CV
-%   = "lin" for standard ordinary least squares linear regression
-method = "lin";
-              
-dx = 0.01;        % cell size for pde
-ng = 2;           % number of ghost cells (=2 !! Don't change !!)
-
-% Choose operator splitting (in time) when diffusion is present
-split = "godunov"; % ="strang" or "godunov" 
-
-%_____________________________________________________________________
-
-if osc<1 || osc>N || ~isscalar(osc) || rem(osc,1)~=0
-    error('Pick integer 1<=osc<=N')
-end
-
-if ~(method=="llr" || method=="lin")
-    error('Expecting method = llr or lin')
-end
-
-hh = H(osc); dd = D(osc); pm = Pm(osc);  % Get associated params ==> see above
-si = 3*osc - 2; % index for speed of osc
-
-% get domain for pde
-if state == "angle"
-    si = si + 1;   % update index
-    
-    % Padding for PDE domain
-    eta = 5*max(std(squeeze(paths_mc(si,:,:)),0,2),[],'all');
-    % PDE computational domain:
-    a0 = -eta; b0 = eta;
-    
-elseif state == "velocity"
-    
-    % Padding for PDE domain
-    eta = 4*max(std(squeeze(paths_mc(si,:,:)),0,2),[],'all');
-    % PDE computational domain:
-    a0 = wr - eta; b0 = wr + eta;
-    
-    % Diffusion coeff.
-    Dco = 0.5*sig(osc)^2;
-else
-    error('Expecting state = angle or velocity')
-end
-
+% line is fixed and data simulated above
+from_line; to_line; mc_energy; mc_condexp_target;
+% set up pde domain
+dx = 0.1;          % spatial step size
+ng = 2;             % number of ghost cells
+a0 = -1.0;            % energy cannot be negative
+b0 = max(mc_energy,[],"all")+1.0*max(std(mc_energy)); % padded right boundary
 nx = ceil((b0-a0)/dx);                      % number of nodes
 xpts = linspace(a0+0.5*dx, b0-0.5*dx,nx)';  % column vector of cell centers
 dx = xpts(2)-xpts(1);                       % updated dx if needed
-xpts_e = [xpts-0.5*dx; xpts(end)+0.5*dx];   % cell edges for advection coeff.
+xpts_e = [xpts-0.5*dx; xpts(end)+0.5*dx];   % cell edges for advection coeff
 
-% allocate pde solution
+% allocate pde solution (IC from kernel density estimate)
 f = zeros(nx+2*ng,nt);
 f_ind = ng+1:nx+ng;     % indices of non-ghost cells
 
-% IC of PDE via KDE (can generate more samples for IC if needed)
-mc2 = 24000;
-if state == "angle"
-    u0mc = sd_d*randn(mc2,1) + d0(osc);
-else
-    u0mc = sd_w*randn(mc2,1) + mu_w;
-end
     
-f0 = [squeeze(paths_mc(si,1,:)); u0mc];
-bw = 0.9*min(std(f0), iqr(f0)/1.34)*(mc+mc2)^(-0.2);
-f(f_ind,1) = ksdensity(f0,xpts,'bandwidth',bw);
-figure(1)
-plot(xpts,f(f_ind,1))
+f0 = [squeeze(mc_energy(:,1))];
+bw = 0.9*min(std(f0), iqr(f0)/1.34)*(mc)^(-0.2);
+f(f_ind,1) = ksdensity(f0,xpts,'bandwidth',bw,'Support','positive', ...
+    'BoundaryCorrection','reflection');
+figure(1);
+plot(xpts, f(f_ind,1),"LineWidth",1.5,"Color","black");
 
+%%
 
+all_first_moments_ropdf = [];
+all_first_moments_ground_truth = [];
+all_second_moments_ropdf = [];
+all_second_moments_ground_truth = [];
 % time loop
 for nn = 2:nt
+    if nn>=200
+        break;
+    end
+    % learn advection coeffcient via data and propagate PDE dynamics
+    % Exact solution is of form: E[Y | X]
+
+    % get X data (previous time)
+    energy_data = squeeze(mc_energy(:,nn-1));
     
-    % Learn advection coeffcient via data:
-   
-    % Advection coefficient is time-dependent; currently using it at 
-    %   previous time when solving the PDE. 
-    
-    % The data at previous time
-    w = squeeze(paths_mc(3*osc-2,nn-1,:));    % speed for osc
-    gov = squeeze(paths_mc(3*osc,nn-1,:));    % governor for osc
-    delt = squeeze(paths_mc(2:3:(3*N-1),nn-1,:)); % all angles: N x mc matrix
+    % get Y data (previous time)
+    response_data = squeeze(mc_condexp_target(:,nn-1));
+
+    % compute advection coefficient (need to be defined on cell centers)
 
     % Get adv. coefficient defined on xpts_e (size(coeff) = size(xpts_e))
-    coeff = get_coeff(mc,osc,w,gov,delt,R,T1,T2,v,hh,dd,pm,wr,b,g,N,xpts_e,state,method,dx);
-    
+    coeff = get_coeff(energy_data,response_data,xpts_e,"lin",alpha,theta,C);
+
+    % for all coeffs outside of the main support, set to 0, technically
+    % undefined (any locations outside of max of energy
+    % observed)
+    tmp = find((xpts_e>max(energy_data)-3*std(energy_data)));
+    coeff(tmp) = 0.0;
     % CFL condition for Lax-Wendroff --> variable time stepping
     u_mag = max(abs(coeff));
     if u_mag==0
@@ -344,23 +281,22 @@ for nn = 2:nt
     
     if dt2 >= dt  % use the dt we already had
         % Homogeneous Dirchlet BC's already set from allocation
-        if state == "angle" % advection only
-            f(f_ind,nn) = lax_wen(f(:,nn-1),f_ind,nx,coeff,dx,dt);
-        else
-            
-            % time splitting for advection and diffusion
-            if split == "godunov"    % 1st order
-                f(f_ind,nn-1) = lax_wen(f(:,nn-1),f_ind,nx,coeff,dx,dt);
-                f(f_ind,nn) = diffusion(f(:,nn-1),f_ind,nx,Dco,dx,dt);
-                
-            elseif split == "strang" % 2nd order
-                f(f_ind,nn-1) = lax_wen(f(:,nn-1),f_ind,nx,coeff,dx,dt/2);
-                f(f_ind,nn-1) = diffusion(f(:,nn-1),f_ind,nx,Dco,dx,dt);
-                f(f_ind,nn) = lax_wen(f(:,nn-1),f_ind,nx,coeff,dx,dt/2);
-            else
-                error('Expecting split = godunov or strang')
-            end
-        end
+        f(f_ind,nn) = lax_wen(f(:,nn-1),f_ind,nx,coeff,dx,dt);
+%         else
+%             
+%             % time splitting for advection and diffusion
+%             if split == "godunov"    % 1st order
+%                 f(f_ind,nn-1) = lax_wen(f(:,nn-1),f_ind,nx,coeff,dx,dt);
+%                 f(f_ind,nn) = diffusion(f(:,nn-1),f_ind,nx,Dco,dx,dt);
+%                 
+%             elseif split == "strang" % 2nd order
+%                 f(f_ind,nn-1) = lax_wen(f(:,nn-1),f_ind,nx,coeff,dx,dt/2);
+%                 f(f_ind,nn-1) = diffusion(f(:,nn-1),f_ind,nx,Dco,dx,dt);
+%                 f(f_ind,nn) = lax_wen(f(:,nn-1),f_ind,nx,coeff,dx,dt/2);
+%             else
+%                 error('Expecting split = godunov or strang')
+%             end
+%         end
             
         
     else
@@ -378,23 +314,22 @@ for nn = 2:nt
         end
         
         for ll = 2:nt_temp
-            if state == "angle" % advection only
-                f_temp(f_ind) = lax_wen(f_temp,f_ind,nx,coeff,dx,dt2);
-            else
-
-                % time splitting for advection and diffusion
-                if split == "godunov"    % 1st order
-                    f_temp(f_ind) = lax_wen(f_temp,f_ind,nx,coeff,dx,dt2);
-                    f_temp(f_ind) = diffusion(f_temp,f_ind,nx,Dco,dx,dt2);
-
-                elseif split == "strang"
-                    f_temp(f_ind) = lax_wen(f_temp,f_ind,nx,coeff,dx,dt2/2);
-                    f_temp(f_ind) = diffusion(f_temp,f_ind,nx,Dco,dx,dt2);
-                    f_temp(f_ind) = lax_wen(f_temp,f_ind,nx,coeff,dx,dt2/2);
-                else
-                    error('Expecting split = godunov or strang')
-                end
-            end
+            f_temp(f_ind) = lax_wen(f_temp,f_ind,nx,coeff,dx,dt2);
+%             else
+% 
+%                 % time splitting for advection and diffusion
+%                 if split == "godunov"    % 1st order
+%                     f_temp(f_ind) = lax_wen(f_temp,f_ind,nx,coeff,dx,dt2);
+%                     f_temp(f_ind) = diffusion(f_temp,f_ind,nx,Dco,dx,dt2);
+% 
+%                 elseif split == "strang"
+%                     f_temp(f_ind) = lax_wen(f_temp,f_ind,nx,coeff,dx,dt2/2);
+%                     f_temp(f_ind) = diffusion(f_temp,f_ind,nx,Dco,dx,dt2);
+%                     f_temp(f_ind) = lax_wen(f_temp,f_ind,nx,coeff,dx,dt2/2);
+%                 else
+%                     error('Expecting split = godunov or strang')
+%                 end
+%             end
         end   
         
         f(f_ind,nn) = f_temp(f_ind);
@@ -406,137 +341,129 @@ for nn = 2:nt
     if max(isnan(f(:,nn)))==1
         error('PDE has NaN values')
     end
-  
-    if mod(nn,50)==0
-        disp(nn)
-        figure(1)
+    disp(nn)
+    % visualize learned coeffs, RO-PDF solution and exact solution from KDE
+    if mod(nn,1)==0
+        fig=figure(1);
+        fig.Position = [100 500 1600 400];
+
+        % Learned coefficients and data
+        subplot(1,4,1);
+        scatter(mc_energy(:,nn),mc_condexp_target(:,nn),...
+            "MarkerEdgeColor","red","SizeData",2.0);
+        hold on;
+        plot(xpts_e,coeff,"--","LineWidth",2.5,"Color","black");
+        hold off;
+        title('Learned Coefficients');
+        xlabel('Line Energy');
+        
+
+        % RO-PDF predictions
+        subplot(1,4,2);
         set(gca,'linewidth',1.5, 'fontsize',20)
-        plot(xpts,f(f_ind,nn),'-b','linewidth',2);
+        f_pred = f(f_ind,nn);
+        mass = trapz(dx,f_pred);
+        f_pred=f_pred/mass;
+        disp(mass);
+        
+        plot(xpts,f_pred,'-b','linewidth',2);
         xlabel('x')
-        title('Marginal PDF solutions')
-        drawnow
+        title('Marginal PDF solutions');
+
+        % KDE ground truth
+        subplot(1,4,3);
+        set(gca,'linewidth',1.5, 'fontsize',20)
+        f0 = [squeeze(mc_energy(:,nn))];
+        %bw = 0.9*min(std(f0), iqr(f0)/1.34)*(mc)^(-0.2);
+        f_kde = ksdensity(f0,xpts,'Support','positive', ...
+            'BoundaryCorrection','reflection');
+        mass=trapz(dx,f_kde);
+        disp(mass)
+        
+        all_first_moments_ropdf = [all_first_moments_ropdf trapz(dx,xpts.*f_pred)];
+        all_first_moments_ground_truth = [all_first_moments_ground_truth trapz(dx,xpts.*f_kde)];
+        all_second_moments_ropdf = [all_second_moments_ropdf trapz(dx,(xpts.^2).*f_pred)];
+        all_second_moments_ground_truth = [all_second_moments_ground_truth trapz(dx,(xpts.^2).*f_kde)];
+
+        f_kde=f_kde/mass;
+        plot(xpts,f_kde,"LineWidth",1.5,"Color","black");
+
+        % compute pointwise error
+        subplot(1,4,4);
+        plot(xpts,abs(f_kde-f_pred),"LineWidth",1.5,"Color","black");
     end
-    
 end
 toc
 
-%_______________________________________________________________________
-%_______________________________________________________________________
-% Internal functions/subroutines
-
-function coeff = get_coeff(mc,osc,w,gov,delt,R,T1,T2,v,hh,dd,pm,wr,b,g,N,xpts_e,state,method,dx)
-
-    d = delt(osc,:)';
-    % Model: yy = r(xx) + e, where E[e] = 0 
-    % Under MSE loss, exact solution is r(x0) = E[yy|xx = x0]
-    % For us, yy is part of the advection coeff. that can't be pulled out
-    %   of the conditional expectation.
-    
-    if state == "angle"
-        xx = d; yy = w;      
-    else 
-        xx = w;
-        
-        dmat = repmat(d',N,1) - delt;
-        yy = gov - (v(osc,:).*sum(v.*(repmat(g(osc,:)',1,mc).*cos(dmat)...
-            + repmat(b(osc,:)',1,mc).*sin(dmat))))';
-        % This is only part of the coeff. We don't need to estimate the
-        %   other part --> see end of this function.
-        
+%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+function coeff0 = get_coeff(xx, yy, xpts_e, mode, alpha, theta, C)
+    % Computes advection coefficient for line energy marginal (on cell 
+    % centers) based on regression from scatter data. 
+    %
+    % Model: yy = r(xx) + error, where E[error] = 0
+    %
+    % Exact solution is r(x0) = E[yy|xx = x0]
+    if numel(xx)~=numel(yy)
+        error("x and y are of different sizes. ");
     end
-    
-    % clean missing or invalid data points, then sort
-    if numel(xx) ~= numel(yy)
-        error('x and y are in different sizes.');
-    end
-    xx = xx(:);  yy = yy(:);
-    inv = (xx~=xx)|(yy~=yy)|(abs(xx)==Inf)|(abs(yy)==Inf);
-    xx(inv)=[];
-    yy(inv)=[];
+    xx = xx(:); yy = yy(:);
+    % sort the data
     [xx,xx_ind] = sort(xx); yy = yy(xx_ind);
-    
-    if  ~isreal(xx) || ~isreal(yy)
-        error('Need xx and yy real col. vector')
-    end
-    
     % number of samples
     ns = length(xx);
-   
     nx = length(xpts_e);
-    % Allocate coeff
-    coeff0 = zeros(nx,1); 
-    
-    if method == "lin"
-        oo = ones(ns,1); X = [oo,xx];
+    dx = xpts_e(2)-xpts_e(1);
+    if mode == "const"
+        % constant regression (simply the average)
+        coeff0 = ones(nx,1).*mean(yy);
+    elseif mode=="lin"
+        % linear regression (parameteric)
+        oo = ones(ns,1); X = [oo,xx]; % include bias term
         beta = ((X'*X)\spdiags(oo,0,2,2))*X'*yy;
         coeff0 = beta(2)*xpts_e + beta(1);
-    else 
-        % method == 'llr'
+    elseif mode == "llr"
+        % local linear regression (nonparameteric)
+        coeff0 = zeros(nx,1);
         % total number of bandwidths choices for CV: logarithmically spaced
         nb = 30; 
         % number of folds for k-fold CV
         kf = 10; 
         % Max Number of padding/extrapolation cells for learning coeff.
-        pad = 5; 
-        
+        pad = 2; 
         % Actual domain for regression (doing extrapolation at +/- pad*dx pts)
         j_ind = find(xpts_e>=(min(xx)-pad*dx) & xpts_e<=max(xx)+pad*dx);
-        
-        % check inputs for regress_ll function
-        if mod(length(xx),kf)~=0 % needs to divide number of samples
-            error("Number of CV folds doesn't divide sample size")
-        end 
-        if nb<2 || rem(nb,1)~=0 || ~isscalar(nb) || ~isreal(nb)
-            error('Need (real) integer nb > 1')
-        end
-        if kf<2 || kf>length(xx) || rem(kf,1)~=0 || ~isscalar(kf) || ~isreal(kf)
-            error('Need (real) integer 2 <= kf <= length(xx)')
-        end
-        coeff0(j_ind) = regress_ll(xx,yy,xpts_e(j_ind),nb,kf,dx,state);
-        
-        % linear extrapolation
-        mx1 = (coeff0(j_ind(2))-coeff0(j_ind(1)))...
-                /(xpts_e(j_ind(2))-xpts_e(j_ind(1)));
-        b1 = coeff0(j_ind(1)) - mx1*xpts_e(j_ind(1));
-        coeff0(1:j_ind(1)-1) = mx1*xpts_e(1:j_ind(1)-1) + b1;
+        coeff0(j_ind) = regress_ll(xx,yy,xpts_e(j_ind),nb,kf,dx);
 
-        mx2 = (coeff0(j_ind(end))-coeff0(j_ind(end-1)))...
-               /(xpts_e(j_ind(end))-xpts_e(j_ind(end-1)));
-        b2 = coeff0(j_ind(end)) - mx2*xpts_e(j_ind(end));
-        coeff0(j_ind(end)+1:end) = mx2*xpts_e(j_ind(end)+1:end) + b2;
-        
-    end
+        % linearly extrapolate
+        mx1 = (coeff0(j_ind(2))-coeff0(j_ind(1)))...
+                 /(xpts_e(j_ind(2))-xpts_e(j_ind(1)));
+         b1 = coeff0(j_ind(1)) - mx1*xpts_e(j_ind(1));
+         coeff0(1:j_ind(1)-1) = mx1*xpts_e(1:j_ind(1)-1) + b1;
     
-    % check is nan
-    if max(isnan(coeff0))==1
+         mx2 = (coeff0(j_ind(end))-coeff0(j_ind(end-1)))...
+                /(xpts_e(j_ind(end))-xpts_e(j_ind(end-1)));
+         b2 = coeff0(j_ind(end)) - mx2*xpts_e(j_ind(end));
+         coeff0(j_ind(end)+1:end) = mx2*xpts_e(j_ind(end)+1:end) + b2;
+
+    elseif mode == "nn"
+        % neural network prediction (considered nonparameteric)
+        error("not implemented. ");
+    else
+        error("mode undefined.");
+    end
+
+    % check if any is nan and throw error
+    if any(isnan(coeff0))
         error('coeff0 is NaN in get_coeff()')
     end
-                        
-    % Uncomment to plot coeff0
- 
-%     figure(2)
-%     plot(xx,yy,'ko','markersize',2); hold on;
-%     plot(xpts_e,coeff0,'-b','linewidth',2); 
-%     set(gca,'linewidth',1.5, 'fontsize',20)
-%     title('Coeff0 Estimate'); xlabel('X_5'); ylabel('f(X_5,t)'); 
-% %     xlim([min(xx,[],'all') max(xx,[],'all')]);
-%     hold off; drawnow
-    
-    if state == "angle"
-        coeff = coeff0 - wr;
-    else
-        coeff = 0.5*wr*(pm - (dd + T1/(R*T2))*(xpts_e-wr) + coeff0)/hh;
-        
-%         figure(3)
-%         plot(xpts_e,coeff,'-b','linewidth',2); 
-%         set(gca,'linewidth',1.5, 'fontsize',20)
-%         title('Vel. Advection Coeff.'); xlabel('X_5'); ylabel('f(X_5,t)'); 
-%         drawnow
-    end
-end
-%_______________________________________________________________________
 
-function coeff0 = regress_ll(xx,yy,xpts,nb,kf,dx,state)
+    % modify learned coefficient to include analytic terms, which is
+    % a constant for line energy
+    coeff0 = coeff0 - 2*(alpha^2)*(theta^2)*trace(C'*C);
+end
+
+function coeff0 = regress_ll(xx,yy,xpts,nb,kf,dx)
     %  Local Linear (Gaussian) Kernel Regression with kf-fold bandwidth selection
     %  approximates f(x) in model Y = f(X) + e, where E[e] = 0
     
@@ -555,13 +482,7 @@ function coeff0 = regress_ll(xx,yy,xpts,nb,kf,dx,state)
     
     % nb possible bandwidths
       % log spaced 
-      if state == "angle"
-          bw_min = 3*dx;   
-          %%% WARNING! MANUALLY TUNED 
-          %%% may need to be chnaged for different case
-      else
-          bw_min = 2*dx;
-      end
+      bw_min = 5*dx; %%% WARNING! MANUALLY TUNED
       
       % nb possible bandwidths
       % log spaced 
@@ -574,23 +495,9 @@ function coeff0 = regress_ll(xx,yy,xpts,nb,kf,dx,state)
 
     % optimal bandwidth
     [~, ksmin_ind] = min(kscv_err); 
-%     if ksmin_ind == nb
-%         warning('CV minimized at maximal bw --> increase bandwidth range')
-%     elseif ksmin_ind == 1
-%         warning('CV minimized at minmal bw --> increase bandwidth range')
-%     end
-    
-%     errors0 = [sqrt(ksmin),kscv_se(ksmin_ind)];
-    
-    % 1 St. Err. rule of thumb (increase regularity)
-%     bw_1se = bw(find(bw(ksmin_ind:end) <= bw(ksmin_ind)+kscv_se(ksmin_ind),...
-%                  1, 'last' ) - 1 + ksmin_ind);
-
     bw_1se = bw(ksmin_ind) + kscv_se(ksmin_ind);
-
     r_opt = ksrlin(xx,yy,bw_1se,xpts);   
     coeff0 = r_opt.f; 
-    
 end
 %_______________________________________________________________________
 function [cv_err, cv_se] = ksrlin_cv(xi,yj,bw,nb,kk)
@@ -624,8 +531,6 @@ function [cv_err, cv_se] = ksrlin_cv(xi,yj,bw,nb,kk)
     end
     
 end
-
-%_______________________________________________________________________
 
 function ff = lax_wen(f,f_ind,nx,u,dx,dt)
 
