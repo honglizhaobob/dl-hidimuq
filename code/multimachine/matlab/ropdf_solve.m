@@ -268,7 +268,7 @@ for nn = 2:nt
     % for all coeffs outside of the main support, set to 0, technically
     % undefined (any locations outside of max of energy
     % observed)
-    tmp = find((xpts_e>max(energy_data)-3*std(energy_data)));
+    tmp = find((xpts_e>max(energy_data)));
     coeff(tmp) = 0.0;
     % CFL condition for Lax-Wendroff --> variable time stepping
     u_mag = max(abs(coeff));
@@ -394,6 +394,19 @@ for nn = 2:nt
     end
 end
 toc
+%% Plot estimated moments
+figure(1);
+plot(time(2:nn-1), all_first_moments_ropdf, "LineWidth", 2.0, "Color", "red"); 
+hold on; plot(time(1:nn-2),all_first_moments_ground_truth, "--", "LineWidth", ...
+    2.0, "Color", "blue")
+title("Estimated first moments");
+
+figure(2);
+plot(time(2:nn-1), all_second_moments_ropdf, "LineWidth", 2.0, "Color", "red"); 
+hold on; plot(time(1:nn-2),all_second_moments_ground_truth, "--", "LineWidth", ...
+    2.0, "Color", "blue")
+title("Estimated second moments");
+
 
 %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -460,7 +473,7 @@ function coeff0 = get_coeff(xx, yy, xpts_e, mode, alpha, theta, C)
 
     % modify learned coefficient to include analytic terms, which is
     % a constant for line energy
-    coeff0 = coeff0 - 2*(alpha^2)*(theta^2)*trace(C'*C);
+    coeff0 = coeff0 - (alpha^2)*(theta^2)*trace(C'*C);
 end
 
 function coeff0 = regress_ll(xx,yy,xpts,nb,kf,dx)
