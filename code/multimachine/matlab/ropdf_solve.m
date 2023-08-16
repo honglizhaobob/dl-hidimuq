@@ -341,7 +341,6 @@ for nn = 2:nt
     if max(isnan(f(:,nn)))==1
         error('PDE has NaN values')
     end
-    disp(nn)
     % visualize learned coeffs, RO-PDF solution and exact solution from KDE
     if mod(nn,1)==0
         fig=figure(1);
@@ -470,10 +469,6 @@ function coeff0 = get_coeff(xx, yy, xpts_e, mode, alpha, theta, C)
     if any(isnan(coeff0))
         error('coeff0 is NaN in get_coeff()')
     end
-
-    % modify learned coefficient to include analytic terms, which is
-    % a constant for line energy
-    coeff0 = coeff0 - (alpha^2)*(theta^2)*trace(C'*C);
 end
 
 function coeff0 = regress_ll(xx,yy,xpts,nb,kf,dx)

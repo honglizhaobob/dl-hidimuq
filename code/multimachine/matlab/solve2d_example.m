@@ -95,7 +95,8 @@ end
 
 for n = 1:nt
 
-    t1 = dt*n
+    t1 = dt*n;
+    disp(t1);
     % Left-right fluxes, i.e. x-direction
     p1 = p;
     % Apdq(i-1/2,j)
