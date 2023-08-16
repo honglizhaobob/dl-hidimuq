@@ -1,6 +1,6 @@
 %     Hongli Zhao, Givens Associate, Argonne Nat. Lab.,
 %     CAM PhD Student, UChicago
-%     Last updated: Aug 15, 2023
+%     Last updated: Aug 16, 2023
 
 % Solving 2d joint RO-PDF equation of energies of two lines
 % Define simulation parameters
@@ -161,11 +161,10 @@ for i = 1:nt
     disp(mass);
     h = h ./ mass;
     surf(xmesh,ymesh,h);
-    view([40,90,90]); 
+    view([90,90,90]); 
     xlabel("Line 1");
     ylabel("Line 2");
     zlabel("Density");
-    zlim([0 1.5])
 end
 %%
 figure(2);
@@ -273,6 +272,20 @@ for nn = 2:nt
     end
 
     % visualize
+    fig=figure(1);
+    fig.Position = [100 500 1600 400];
+    subplot(1,3,1);
+    % plot predicted (RO-PDF)
+    surf(p(3:end-2,3:end-2,nn));
+    view([90,90,90]); 
+    subplot(1,3,2);
+    % plot exact
+    %surf(p(3:end-2,3:end-2,nn));
+    %view([90,90,90]); 
+    subplot(1,3,3);
+    % plot error
+    %surf(abs(p(3:end-2,3:end-2,nn)-pkde(3:end-2,3:end-2,nn)));
+    %view([90,90,90]); 
 end
 
 %% Helper subroutines
