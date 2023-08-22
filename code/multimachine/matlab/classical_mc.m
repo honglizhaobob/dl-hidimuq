@@ -6,7 +6,7 @@ function paths_mc = classical_mc(mc,dt,nt,u0,alpha,theta,C,H,D,P,wr,g,b)
     %       n                       number of states
     %
     %
-    %       mc                      number of Monte Carlo trials\
+    %       mc                      number of Monte Carlo trials
     %
     %
     %       nt                      number to time steps to take

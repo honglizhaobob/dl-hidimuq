@@ -34,7 +34,7 @@ R = 0.02;              % Droop
 T1 = 0;                % Transient gain time
 T2 = 0.1;              % Governor time constant
 
-mc = 5000;             % Number of MC paths
+mc = 10000;             % Number of MC paths
 tf = 50.0;               % final time for simulation
 dt = 0.01;             % learn PDE coefficients in increments of dt
 time = 0:dt:tf;        % coarse uniform time grid
@@ -48,54 +48,50 @@ if mod(dt,dt0)~=0
     error('dt0 does not divide dt')
 end
 
-%% Define random initial conditions
-% Allocate random initial conditions:
-u0 = zeros(mc,4*n);
-
-% Random Initial speeds (Gaussian)
-mu_w = 1; sd_w = 0.1;
-u0_w = sd_w*randn(mc,n) + mu_w;
-
-% Random Initial angles Gaussian
-sd_d = 5.0 * pi/180.0; % sd_d = 10.0 degrees, mean around optimal d0
-u0_d = sd_d*randn(mc,n) + reshape(d0,1,[]);
-
-% Random voltages . (folded gaussian, mean at optimal vi)
-sd_v = mean(vi)*0.01;
-v = abs(sd_v*randn(mc,n) + reshape(vi,1,[]));
-
-% Random initial conditions for OU noise
-theta = 1.0;                % drift parameter
-alpha = 0.05;               % diffusion parameter
-
-% define covariance matrix
-case_number = 9;
-mode = "const";
-reactance_mat = [];
-susceptance_mat = [];
-R = cov_model(case_number, mode, reactance_mat, susceptance_mat);
-C = chol(R)';
-eta0 = mvnrnd(zeros(n,1),(alpha^2)*R,mc);
-
-% store in initial condition, ordering [v; w; delta; eta]
-u0(:, 1:n) = v;      
-u0(:, n+1:2*n) = u0_w;
-u0(:, 2*n+1:3*n) = u0_d;
-u0(:, 3*n+1:end) = eta0;
-
-
 %% Simulate Monte Carlo trajectories
 if isfile("./data/case9_mc.mat")
     load("./data/case9_mc.mat");
 else
     tic
+    % Simulate Monte Carlo trajectories
+    % Allocate random initial conditions:
+    u0 = zeros(mc,4*n);
+    % Random Initial speeds (Gaussian)
+    mu_w = 1; sd_w = 0.1;
+    u0_w = sd_w*randn(mc,n) + mu_w;
+    
+    % Random Initial angles Gaussian
+    sd_d = 5.0 * pi/180.0; % sd_d = 10.0 degrees, mean around optimal d0
+    u0_d = sd_d*randn(mc,n) + reshape(d0,1,[]);
+    
+    % Random voltages . (folded gaussian, mean at optimal vi)
+    sd_v = mean(vi)*0.01;
+    v = abs(sd_v*randn(mc,n) + reshape(vi,1,[]));
+    
+    % Random initial conditions for OU noise
+    theta = 1.0;                % drift parameter
+    alpha = 0.05;               % diffusion parameter
+    
+    % define covariance matrix
+    case_number = 9;
+    mode = "const";
+    reactance_mat = [];
+    susceptance_mat = [];
+    R = cov_model(case_number, mode, reactance_mat, susceptance_mat);
+    C = chol(R)';
+    eta0 = mvnrnd(zeros(n,1),(alpha^2)*R,mc);
+    
+    % store in initial condition, ordering [v; w; delta; eta]
+    u0(:, 1:n) = v;      
+    u0(:, n+1:2*n) = u0_w;
+    u0(:, 2*n+1:3*n) = u0_d;
+    u0(:, 3*n+1:end) = eta0;
     %(3*N x nt x mc)
     paths_mc = classical_mc(mc,dt,nt,u0,alpha,theta,C,H,D,Pm,wr,g,b);
     toc
-    save("./data/case9_mc.mat");
 end
-
-%% Compute energy for two lines connected to the same machine
+%%
+% Compute energy for two lines connected to the same machine
 tt = time';
 from_line1 = 8; to_line1 = 9;
 from_line2 = 8; to_line2 = 7;
@@ -121,9 +117,7 @@ for i =1:mc
         mc_condexp_target2(i,j)=condexp_target(b,from_line2,to_line2,u_i,wr);
     end
 end
-
-%% save data
-save("./data/case9_mc.mat");
+save("./data/case9_mc.mat", '-v7.3');
 
 %% Visualize bivariate density of line energies
 x_min = 0; x_max = 3;
@@ -259,7 +253,7 @@ for nn = 2:nt
         end
         % take adaptive time steps
         for ll=2:nt_temp
-            ptmp = transport(ptmp,coeff1,coeff2,dx,dy,dt);
+            ptmp = transport(ptmp,coeff1,coeff2,dx,dy,dt2);
         end
         % store at coarse time step
         p(:,:,nn) = ptmp;
