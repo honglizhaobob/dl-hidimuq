@@ -7,7 +7,7 @@ clear; rng('default');
 run("./matpower7.1/startup.m");
 
 % choose case from matpower7.1/data
-[dist, Pm, amat, vi, d0, success] = runpf_edited('case9.m');
+[dist, Pm, amat, vi, d0, success] = runpf_edited('case118.m');
 % get real and imaginary parts
 
 % real part
@@ -37,7 +37,7 @@ dt = 0.01;             % learn PDE coefficients in increments of dt
 time = 0:dt:tf;        % coarse uniform time grid
 tt = time;
 nt = length(time);     % number of time steps
-% Sanity check: simulate deterministic equations with optimal initial conditions
+%% Sanity check: simulate deterministic equations with optimal initial conditions
 % initial condition
 x0 = zeros(3*n,1);
 % initial velocities
@@ -94,7 +94,7 @@ theta = 1.0;                % drift parameter
 alpha = 0.05;               % diffusion parameter
 
 % define covariance matrix
-case_number = 9;
+case_number = 118;
 mode = "const";
 reactance_mat = [];
 susceptance_mat = [];
@@ -109,14 +109,20 @@ u0(:, 2*n+1:3*n) = u0_d;
 u0(:, 3*n+1:end) = eta0;
 
 % save / load burned initial conditions
-fname = "./data/case9_ic.mat";
+fname = "./data/case118_ic.mat";
 if ~isfile(fname)
     disp("burning ICs ");
-    % burn samples for tf time
-    burn_mc = classical_mc(mc,dt,nt,u0,alpha,theta,C,H,D,Pm,wr,g,b);
+    % burn samples for tf time for all mc samples
+    for i = 1:mc
+        i
+        for j = 1:nt
+            u0(i,:)=classical_mc_step(dt,u0(i,:),alpha,theta,C,H,D,Pm,wr,g,b);
+        end
+    end
+    
     % save
     disp("saving... ");
-    burned_ic = burn_mc(:,:,end);
+    burned_ic = u0;
     save(fname,"burned_ic","-v7.3");
 else
     disp("IC computed, loading...");
@@ -124,10 +130,11 @@ else
     burned_ic = tmp.burned_ic;
 end
 
+%%
 u0 = burned_ic;
 % simulate paths
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Case 9: RO-PDF problem set up
+% Case 118: RO-PDF problem set up
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 tf = 10.0;
 dt = 0.01;           % learn PDE coefficients in increments of dt
@@ -139,117 +146,45 @@ nt = length(tt);     % number of time steps
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 remove_line = true;
 if remove_line
-    % remove (8, 9), see: Page 70 of https://link.springer.com/chapter/10.1007/BFb0044331
-    % for network topology. And measure (4, 9), (8, 7), adjacent lines.
-    trip_from = 8; trip_to = 9;
+    % 
+    trip_from = 32; trip_to = 114;
     % assign admittance to 0
     g(trip_from,trip_to)=0.0; 
     b(trip_from,trip_to)=0.0;
 end
 
-fname = "./data/case9_mc_data.mat";
+% adjacent lines to compute energy
+from_line1 = 32; to_line1 = 113;
+from_line2 = 27; to_line2 = 32;
+
+% preallocate 
+mc_energy1 = zeros(mc,nt);
+mc_energy2 = zeros(mc,nt);
+mc_target1 = zeros(mc,nt);
+mc_target2 = zeros(mc,nt);
+
+fname = "./data/case118_mc_data.mat";
 if ~isfile(fname)
-    disp("simulating trajectories ...");
-    % simulate SDE with burned IC
-    paths_mc = classical_mc(mc,dt,nt,u0,alpha,theta,C,H,D,Pm,wr,g,b);
-    % save
-    save(fname,"-v7.3");
-else
-    disp("loading simulated trajectories ...");
-    load(fname);
-end
-
-%% Visualize trajectories
-close all
-% All mc trials
-f = figure(1);
-f.Position = [500 500 1240 400];
-subplot(1,4,1)
-plot(tt,squeeze(paths_mc(1,1:n,:)), "LineWidth", 1.2); 
-title('MC voltages for i = 1')
-set(gca,'linewidth',1.5, 'fontsize',20); xlabel('t')
-xlim([0 tt(end)])
-
-subplot(1,4,2)
-plot(tt,squeeze(paths_mc(1,n+1:2*n,:)), "LineWidth", 1.2); 
-title('MC speeds for i = 1')
-set(gca,'linewidth',1.5, 'fontsize',20); xlabel('t')
-xlim([0 tt(end)])
-
-subplot(1,4,3)
-plot(tt,squeeze(paths_mc(1,2*n+1:3*n,:)), "LineWidth", 1.2); 
-title('MC angles for i = 1')
-set(gca,'linewidth',1.5, 'fontsize',20); xlabel('t')
-xlim([0 tt(end)])
-
-
-subplot(1,4,4)
-plot(tt,squeeze(paths_mc(1,3*n+1:end,:)), "LineWidth", 1.2); 
-title('OU noise for i = 1')
-set(gca,'linewidth',1.5, 'fontsize',20); xlabel('t')
-xlim([0 tt(end)])
-
-% Mean across machines
-f2 = figure(2);
-f2.Position = [500 500 1500 400];
-subplot(1,4,1)
-plot(tt,mean(squeeze(paths_mc(1,1:n,:)),1),'linewidth',2,"Color","red"); 
-title('Average voltage for i = 1'); xlabel('t')
-set(gca,'linewidth',1.5, 'fontsize',20)
-xlim([0 tt(end)])
-
-subplot(1,4,2)
-plot(tt,mean(squeeze(paths_mc(1,n+1:2*n,:)),1),'linewidth',2,"Color","red"); 
-title('Average speeds for i = 1'); xlabel('t')
-set(gca,'linewidth',1.5, 'fontsize',20)
-xlim([0 tt(end)])
-
-subplot(1,4,3)
-plot(tt,mean(squeeze(paths_mc(1,2*n+1:3*n,:)),1),'linewidth',2,"Color","red"); 
-title('Average angles for i = 1'); xlabel('t')
-set(gca,'linewidth',1.5, 'fontsize',20)
-xlim([0 tt(end)])
-
-subplot(1,4,4)
-plot(tt,mean(squeeze(paths_mc(1,3*n+1:end,:)),1),'linewidth',2,"Color","red"); 
-title('Average OU noise for i = 1'); xlabel('t')
-set(gca,'linewidth',1.5, 'fontsize',20)
-xlim([0 tt(end)])
-
-
-%% Compute energy for a specific line given paths data
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% SELECT TWO LINES
-from_line1 = 4;
-to_line1 = 9;
-from_line2 = 7;
-to_line2 = 8;
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% save / load
-fname = "./data/case9_mc1d_coeff_data.mat";
-if ~isfile(fname)
-    disp("running conditional expectation from scratch. ")
-    % compute energy for each Monte Carlo trial at each time point
-    mc_energy1 = zeros(mc,nt);
-    mc_energy2 = zeros(mc,nt);
-    % compute expectation output for each Monte Carlo trial at each time point
-    mc_condexp_target1 = zeros(mc,nt);
-    mc_condexp_target2 = zeros(mc,nt);
-    for i =1:mc
-        disp(i)
-        for j = 1:nt
-            % get solution
-            u_i = reshape(paths_mc(i,:,j), [], 1);
-            mc_energy1(i,j)=line_energy(b,from_line1,to_line1,u_i);
-            mc_condexp_target1(i,j)=condexp_target(b,from_line1,to_line1,u_i,wr);
-            mc_energy2(i,j)=line_energy(b,from_line2,to_line2,u_i);
-            mc_condexp_target2(i,j)=condexp_target(b,from_line2,to_line2,u_i,wr);
+    disp("simulating trajectories and computing energy ...");
+    for i = 1:nt
+        i
+        for j = 1:mc
+            % step SDE
+            u0(j,:)=classical_mc_step(dt,u0(j,:),alpha,theta,C,H,D,Pm,wr,g,b);
+            % compute energy
+            mc_energy1(j,i)=line_energy(b,from_line1,to_line1,u0(j,:));
+            mc_energy2(j,i)=line_energy(b,from_line2,to_line2,u0(j,:));
+            % compute regression response
+            mc_target1(j,i)=condexp_target(b,from_line1,to_line1,u0(j,:));
+            mc_target2(j,i)=condexp_target(b,from_line2,to_line2,u0(j,:));
         end
     end
+    % save
     disp("finished ... saving. ")
-    save(fname, "tt", "mc_energy1", "mc_condexp_target1", ...
-        "mc_energy2", "mc_condexp_target2", "-v7.3");
+    save(fname, "mc_energy1", "mc_target1", ...
+        "mc_energy2", "mc_target2", "-v7.3");
 else
+    disp("loading simulated trajectories ...");
     load(fname);
 end
 
@@ -257,15 +192,16 @@ end
 close all; 
 rng('default');
 
-% line is fixed and data simulated above (1d)
-from_line=from_line1; to_line=to_line1; 
-mc_energy=mc_energy1; 
-mc_condexp_target=mc_condexp_target1;
+% line is fixed and data simulated above
+from_line = from_line1; 
+to_line = to_line1;
+mc_energy = mc_energy1; 
+mc_condexp_target = mc_target1;
 % set up pde domain
-dx = 0.02;          % spatial step size
+dx = 0.05;          % spatial step size
 ng = 2;             % number of ghost cells
 a0 = 0.0;            % energy cannot be negative
-b0 = max(mc_energy,[],"all"); % padded right boundary
+b0 = max(mc_energy,[],"all")+1.0*std(mc_energy,[],"all"); % padded right boundary
 nx = ceil((b0-a0)/dx);                      % number of nodes
 xpts = linspace(a0+0.5*dx, b0-0.5*dx,nx)';  % column vector of cell centers
 dx = xpts(2)-xpts(1);                       % updated dx if needed
@@ -290,7 +226,7 @@ all_second_moments_ground_truth = [];
 all_l2_err = [];
 
 % reduced order MC trial numbers
-mcro = 500;
+mcro = 2000;
 % time loop
 for nn = 2:nt
     disp(nn)
@@ -306,13 +242,14 @@ for nn = 2:nt
     % compute advection coefficient (need to be defined on cell centers)
 
     % Get adv. coefficient defined on xpts_e (size(coeff) = size(xpts_e))
-    coeff = get_coeff(energy_data,response_data,xpts_e,"llr");
 
-    % for all coeffs outside of the main support, set to 0, technically
-    % undefined (any locations outside of max of energy
-    % observed)
-    %tmp = find((xpts_e>max(energy_data))|(xpts_e<min(energy_data)));
-    %coeff(tmp) = 0.0;
+    % box cox transform the x variable
+    %[energy_data_boxcox,lambda_boxcox] = boxcox(energy_data);
+    %coeff = get_coeff(energy_data_boxcox, ...
+    %    response_data,boxcox(lambda_boxcox,xpts_e),"llr");
+
+    % no box cox
+    coeff = get_coeff(energy_data,response_data,xpts_e,"llr");
 
     % CFL condition for Lax-Wendroff --> variable time stepping
     u_mag = max(abs(coeff));
@@ -346,6 +283,8 @@ for nn = 2:nt
         f(f_ind,nn) = f_temp(f_ind);
     end    
     
+    % force normalize
+    f(f_ind,nn) = normalize_pdf(f(f_ind,nn),dx);
     if max(abs(f(:,nn)))>1e2
         error('PDE blows up')
     end
@@ -359,8 +298,8 @@ for nn = 2:nt
         fig.Position = [100 500 1600 400];
 
         % Learned coefficients and data
-        subplot(1,4,1);
-        scatter(mc_energy(1:mcro,nn),mc_condexp_target(1:mcro,nn),...
+        subplot(1,3,1);
+        scatter(mc_energy(1:mcro,nn-1),mc_condexp_target(1:mcro,nn-1),...
             "MarkerEdgeColor","red","SizeData",2.0);
         hold on;
         plot(xpts_e,coeff,"--","LineWidth",2.5,"Color","black");
@@ -370,29 +309,36 @@ for nn = 2:nt
         
 
         % RO-PDF predictions
-        subplot(1,4,2);
-        set(gca,'linewidth',1.5, 'fontsize',20)
         f_pred = f(f_ind,nn);
         
-        plot(xpts,f_pred,'-b','linewidth',2);
-        xlabel('x')
-        title('Marginal PDF solutions');
-
         % KDE ground truth
-        subplot(1,4,3);
+        subplot(1,3,2);
         set(gca,'linewidth',1.5, 'fontsize',20)
         f0 = [squeeze(mc_energy(:,nn))];
-        %bw = 0.9*min(std(f0), iqr(f0)/1.34)*(mc)^(-0.2);
-        f_kde = ksdensity(f0,xpts,'Support','positive', ...
-            'BoundaryCorrection','reflection');
+        bw = 0.9*min(std(f0), iqr(f0)/1.34)*(mc)^(-0.2);
+        f_kde = ksdensity(f0,xpts,"Bandwidth", bw);
+        f_kde = f_kde / trapz(dx,f_kde);
+
         all_first_moments_ropdf = [all_first_moments_ropdf trapz(dx,xpts.*f_pred)];
         all_first_moments_ground_truth = [all_first_moments_ground_truth trapz(dx,xpts.*f_kde)];
         all_second_moments_ropdf = [all_second_moments_ropdf trapz(dx,(xpts.^2).*f_pred)];
         all_second_moments_ground_truth = [all_second_moments_ground_truth trapz(dx,(xpts.^2).*f_kde)];
-        plot(xpts,f_kde,"LineWidth",1.5,"Color","black");
+        plot(xpts,f_kde,"--","LineWidth",1.5,"Color","black"); 
+        hold on;
+        plot(xpts,f_pred,"LineWidth",2.5,"Color","blue");
+        legend(["KDE","ROPDF"]);
+        hold off;
 
-        % compute relative L^2 error
-        tmp  =trapz(dx,(f_kde-f_pred).^2);
+        % compute CDF
+        subplot(1,3,3);
+        plot(xpts,cumtrapz(dx*f_kde),"--","LineWidth",2.5,"Color", [0.4, 0.4, 0.4, 0.2]);
+        hold on;
+        plot(xpts,cumtrapz(dx*f_pred),"LineWidth",1.5,"Color","blue");
+        legend(["KDE","ROPDF"]);
+        hold off;
+        % compute L^2 error
+        tmp  =trapz(dx,(f_kde-f_pred).^2)/trapz(dx,f_kde.^2);
+
         disp(tmp)
         all_l2_err = [all_l2_err tmp];
 
@@ -400,19 +346,20 @@ for nn = 2:nt
 end
 %% Plot estimated moments
 figure(1);
-plot(tt(2:end), all_first_moments_ropdf, "LineWidth", 2.0, "Color", "red"); 
-hold on; plot(tt(2:end),all_first_moments_ground_truth, "--", "LineWidth", ...
+plot(tt(1:length(all_first_moments_ropdf)), all_first_moments_ropdf, "LineWidth", 2.0, "Color", "red"); 
+hold on; plot(tt(1:length(all_first_moments_ropdf)),all_first_moments_ground_truth, "--", "LineWidth", ...
     2.0, "Color", "blue")
 legend(["Pred", "True"]);
 title("Estimated first moments");
 
 figure(2);
-plot(tt(2:end), all_second_moments_ropdf, "LineWidth", 2.0, "Color", "red"); 
-hold on; plot(tt(2:end),all_second_moments_ground_truth, "--", "LineWidth", ...
+plot(tt(1:length(all_first_moments_ropdf)), all_second_moments_ropdf, "LineWidth", 2.0, "Color", "red"); 
+hold on; plot(tt(1:length(all_first_moments_ropdf)),all_second_moments_ground_truth, "--", "LineWidth", ...
     2.0, "Color", "blue")
 legend(["Pred", "True"]);
 title("Estimated second moments");
 
 figure(3);
-plot(tt(2:end), all_l2_err, "LineWidth", 3.0, "Color", "black"); 
+plot(tt(1:length(all_first_moments_ropdf)), all_l2_err, "LineWidth", 3.0, "Color", "black"); 
 title("L^2 Error over time");
+

@@ -51,6 +51,19 @@ function R = cov_model(case_number, mode, B, X)
         else
             error("not implemented. ");
         end
+    elseif case_number == 118
+        n = 118;
+        if mode == "id"
+            R = eye(n);
+        elseif mode == "const"
+            R = 0.51.*ones(n,n);
+            % reassign diagonal elements
+            for i=1:n
+                R(i,i)=1.0;
+            end
+        else
+            error("not implemented. ");
+        end
     else
         error("Requires implementation. ")
     end

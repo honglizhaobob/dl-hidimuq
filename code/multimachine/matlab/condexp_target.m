@@ -1,4 +1,4 @@
-function res = condexp_target(b, i, j, x, wr)
+function res = condexp_target(b, i, j, x)
     % The argument of conditional expectation for the RO-PDF equation
     % defined for the line energy. 
     % The exact expression is:

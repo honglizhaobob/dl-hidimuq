@@ -8,27 +8,29 @@
 clear; rng('default');
 %% Load data
 % Data should already have been simulated, see `ropdf_solve_case9.m`
-fname = "./data/case9_mc1d_coeff_data.mat";
+fname = "./data/case30_mc_data.mat";
 if ~isfile(fname)
     error("run the 1d file to generate data. ")
 else
     load(fname);
-    tt = tt(:);
-    nt = length(tt);
-    dt = tt(2)-tt(1);
+    % time grid definition should agree with the 1d
+    tf = 10.0;
+    dt = 0.01;           % learn PDE coefficients in increments of dt
+    tt = 0:dt:tf;        % coarse uniform time grid
+    nt = length(tt);     % number of time steps
 end
 %%
 % Compute energy for two lines connected to the same machine
-from_line1 = 4; to_line1 = 9;
-from_line2 = 7; to_line2 = 8;
+from_line1 = 6; to_line1 = 7;
+from_line2 = 6; to_line2 = 9;
 
 %% Learn coffcients & solve 2d marginal PDE by corner transport
 close all; 
 rng('default');
 
 % line is fixed and data simulated above
-from_line1; to_line1; mc_energy1; mc_condexp_target1;
-from_line2; to_line2; mc_energy2; mc_condexp_target2;
+from_line1; to_line1; mc_energy1; mc_target1;
+from_line2; to_line2; mc_energy2; mc_target2;
 
 % set up pde domain
 dx = 0.02; 
@@ -36,10 +38,10 @@ dy = dx*2;    % spatial step size
 ng = 2;             % number of ghost cells
 
 % left right boundaries
-x_min = 0; x_max = 1;
+x_min = 0; x_max = 4.5;
 nx = ceil((x_max-x_min)/dx);
 % top bottom boundaries
-y_min = 0; y_max = 2;
+y_min = 0; y_max = 4.0;
 ny = ceil((y_max-y_min)/dy);
 % cell centers
 xpts = linspace(x_min+0.5*dx,x_max-0.5*dx,nx)';
@@ -79,18 +81,18 @@ all_covariance_pred = [];
 all_covariance_kde = [];
 
 % reduced order MC trials
-mcro = 5000;
+mcro = 2000;
+
 for nn = 2:nt
     disp(nn)
     % estimate coefficients on cell edges
     x_data = squeeze(mc_energy1(1:mcro,nn-1));
     y_data = squeeze(mc_energy2(1:mcro,nn-1));
     % d/dx coefficient
-    response_x_data = squeeze(mc_condexp_target1(1:mcro,nn-1));
+    response_x_data = squeeze(mc_target1(1:mcro,nn-1));
     
     % mode for coefficient regression
-    %mode = "lin";       % linear regression
-    mode = "lowess";    % LOWESS smoothing
+    mode = "lin";       % linear regression
     coeff1 = get_coeff2d(x_data,y_data,response_x_data,xpts_e,ypts_e,mode);
 
 %     figure(10);
@@ -99,7 +101,7 @@ for nn = 2:nt
 %     hold on; surf(Xge,Yge,coeff1); hold off;
 
     % d/dy coefficient
-    response_y_data = squeeze(mc_condexp_target2(1:mcro,nn-1));
+    response_y_data = squeeze(mc_target2(1:mcro,nn-1));
     coeff2 = get_coeff2d(x_data,y_data,response_y_data,xpts_e,ypts_e,mode);
 
     % zero out coefficients outside of main support
