@@ -288,11 +288,12 @@ all_second_moments_ground_truth = [];
 
 % L^2 error in space, over time
 all_l2_err = [];
-
 % reduced order MC trial numbers
 mcro = 500;
 % time loop
 for nn = 2:nt
+    % current time of simulation
+    curr_time = dt*nn;
     disp(nn)
     % learn advection coeffcient via data and propagate PDE dynamics
     % Exact solution is of form: E[Y | X]
@@ -359,7 +360,7 @@ for nn = 2:nt
         fig.Position = [100 500 1600 400];
 
         % Learned coefficients and data
-        subplot(1,4,1);
+        subplot(1,3,1);
         scatter(mc_energy(1:mcro,nn),mc_condexp_target(1:mcro,nn),...
             "MarkerEdgeColor","red","SizeData",2.0);
         hold on;
@@ -370,7 +371,7 @@ for nn = 2:nt
         
 
         % RO-PDF predictions
-        subplot(1,4,2);
+        subplot(1,3,2);
         set(gca,'linewidth',1.5, 'fontsize',20)
         f_pred = f(f_ind,nn);
         
@@ -379,17 +380,54 @@ for nn = 2:nt
         title('Marginal PDF solutions');
 
         % KDE ground truth
-        subplot(1,4,3);
+        subplot(1,3,3);
         set(gca,'linewidth',1.5, 'fontsize',20)
         f0 = [squeeze(mc_energy(:,nn))];
         %bw = 0.9*min(std(f0), iqr(f0)/1.34)*(mc)^(-0.2);
         f_kde = ksdensity(f0,xpts,'Support','positive', ...
             'BoundaryCorrection','reflection');
-        all_first_moments_ropdf = [all_first_moments_ropdf trapz(dx,xpts.*f_pred)];
-        all_first_moments_ground_truth = [all_first_moments_ground_truth trapz(dx,xpts.*f_kde)];
-        all_second_moments_ropdf = [all_second_moments_ropdf trapz(dx,(xpts.^2).*f_pred)];
-        all_second_moments_ground_truth = [all_second_moments_ground_truth trapz(dx,(xpts.^2).*f_kde)];
+        all_first_moments_ropdf = ...
+            [all_first_moments_ropdf trapz(dx,xpts.*f_pred)];
+        all_first_moments_ground_truth = ...
+            [all_first_moments_ground_truth trapz(dx,xpts.*f_kde)];
+        all_second_moments_ropdf = ...
+            [all_second_moments_ropdf trapz(dx,(xpts.^2).*f_pred)];
+        all_second_moments_ground_truth = ...
+            [all_second_moments_ground_truth trapz(dx,(xpts.^2).*f_kde)];
         plot(xpts,f_kde,"LineWidth",1.5,"Color","black");
+
+        
+        % save at t = 1.0, 2.0, 4.0, 8.0
+        if curr_time == 1.0 || curr_time == 2.0 || ... 
+                curr_time == 4.0 || curr_time == 8.0
+            figure_name = strcat("./fig/CASE9_ROPDF_CDF_Time_", ...
+                num2str(curr_time),".png");
+            % Save figures for reporting 
+            fig=figure(2);
+            fig.Position = [500 500 500 500];
+            % estimate CDF
+            F_pred = cumtrapz(f_pred*dx);
+            F_kde = cumtrapz(f_kde*dx);
+            plot(xpts,F_pred,"LineWidth",3.0);
+            hold on;
+            plot(xpts,F_kde,"--","LineWidth",5.0,"Color",[0 0 0 0.5]);
+    
+            title("Case 9","FontSize",18);
+            xlabel("Line Energy","FontSize",18);
+            ylabel("CDF","FontSize",18);
+           
+            % add more lines 
+            hold on;
+            if curr_time == 8.0
+                legend(["t = 1.0", "", "t = 2.0", "", "t = 4.0", ...
+                    "", "t = 8.0", "Benchmark"], ...
+                    "FontSize",16, ...
+                    "Location","southeast");
+                % save figure
+                exportgraphics(gcf,figure_name,"Resolution",200);
+                disp(strcat("Figure saved at t = ",num2str(curr_time)));
+            end
+        end
 
         % compute relative L^2 error
         tmp  =trapz(dx,(f_kde-f_pred).^2);

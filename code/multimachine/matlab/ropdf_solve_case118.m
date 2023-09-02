@@ -198,7 +198,7 @@ to_line = to_line1;
 mc_energy = mc_energy1; 
 mc_condexp_target = mc_target1;
 % set up pde domain
-dx = 0.05;          % spatial step size
+dx = 0.03;          % spatial step size
 ng = 2;             % number of ghost cells
 a0 = 0.0;            % energy cannot be negative
 b0 = max(mc_energy,[],"all")+1.0*std(mc_energy,[],"all"); % padded right boundary
@@ -230,6 +230,7 @@ mcro = 2000;
 % time loop
 for nn = 2:nt
     disp(nn)
+    curr_time = dt*nn;
     % learn advection coeffcient via data and propagate PDE dynamics
     % Exact solution is of form: E[Y | X]
 
@@ -293,56 +294,92 @@ for nn = 2:nt
     end
 
     % visualize learned coeffs, RO-PDF solution and exact solution from KDE
-    if mod(nn,1)==0
-        fig=figure(1);
-        fig.Position = [100 500 1600 400];
+    fig=figure(1);
+    fig.Position = [100 500 1600 400];
 
-        % Learned coefficients and data
-        subplot(1,3,1);
-        scatter(mc_energy(1:mcro,nn-1),mc_condexp_target(1:mcro,nn-1),...
-            "MarkerEdgeColor","red","SizeData",2.0);
+    % Learned coefficients and data
+    subplot(1,3,1);
+    scatter(mc_energy(1:mcro,nn-1),mc_condexp_target(1:mcro,nn-1),...
+        "MarkerEdgeColor","red","SizeData",2.0);
+    hold on;
+    plot(xpts_e,coeff,"--","LineWidth",2.5,"Color","black");
+    hold off;
+    title('Learned Coefficients');
+    xlabel('Line Energy');
+    
+
+    % RO-PDF predictions
+    f_pred = f(f_ind,nn);
+    
+    % KDE ground truth
+    subplot(1,3,2);
+    set(gca,'linewidth',1.5, 'fontsize',20)
+    f0 = [squeeze(mc_energy(:,nn))];
+    bw = 0.9*min(std(f0), iqr(f0)/1.34)*(mc)^(-0.2);
+    f_kde = ksdensity(f0,xpts,"Bandwidth", bw);
+    f_kde = f_kde / trapz(dx,f_kde);
+
+    all_first_moments_ropdf = [all_first_moments_ropdf trapz(dx,xpts.*f_pred)];
+    all_first_moments_ground_truth = [all_first_moments_ground_truth trapz(dx,xpts.*f_kde)];
+    all_second_moments_ropdf = [all_second_moments_ropdf trapz(dx,(xpts.^2).*f_pred)];
+    all_second_moments_ground_truth = [all_second_moments_ground_truth trapz(dx,(xpts.^2).*f_kde)];
+    plot(xpts,f_kde,"--","LineWidth",1.5,"Color","black"); 
+    hold on;
+    plot(xpts,f_pred,"LineWidth",2.5,"Color","blue");
+    legend(["KDE","ROPDF"]);
+    hold off;
+
+    % compute CDF
+    subplot(1,3,3);
+    plot(xpts,cumtrapz(dx*f_kde),"--","LineWidth",2.5,"Color", [0.4, 0.4, 0.4, 0.2]);
+    hold on;
+    plot(xpts,cumtrapz(dx*f_pred),"LineWidth",1.5,"Color","blue");
+    legend(["KDE","ROPDF"]);
+    hold off;
+    % compute L^2 error
+    tmp  =trapz(dx,(f_kde-f_pred).^2)/trapz(dx,f_kde.^2);
+
+    disp(tmp)
+    all_l2_err = [all_l2_err tmp];
+
+    % ------------------------------------------------------------
+    % SAVE FIGURES
+    % ------------------------------------------------------------
+    % save at selected times 
+    if curr_time == 1.5 || curr_time == 3.0 || ... 
+            curr_time == 4.5 || curr_time == 6.0
+        figure_name = strcat("./fig/CASE118_ROPDF_CDF_Time_", ...
+            num2str(curr_time),".png");
+        % Save figures for reporting 
+        fig=figure(2);
+        fig.Position = [500 500 500 500];
+        % estimate CDF
+        F_pred = cumtrapz(f_pred*dx);
+        F_kde = cumtrapz(f_kde*dx);
+        plot(xpts,F_pred,"LineWidth",3.0);
         hold on;
-        plot(xpts_e,coeff,"--","LineWidth",2.5,"Color","black");
-        hold off;
-        title('Learned Coefficients');
-        xlabel('Line Energy');
-        
+        plot(xpts,F_kde,"--","LineWidth",5.0,"Color",[0 0 0 0.5]);
 
-        % RO-PDF predictions
-        f_pred = f(f_ind,nn);
-        
-        % KDE ground truth
-        subplot(1,3,2);
-        set(gca,'linewidth',1.5, 'fontsize',20)
-        f0 = [squeeze(mc_energy(:,nn))];
-        bw = 0.9*min(std(f0), iqr(f0)/1.34)*(mc)^(-0.2);
-        f_kde = ksdensity(f0,xpts,"Bandwidth", bw);
-        f_kde = f_kde / trapz(dx,f_kde);
-
-        all_first_moments_ropdf = [all_first_moments_ropdf trapz(dx,xpts.*f_pred)];
-        all_first_moments_ground_truth = [all_first_moments_ground_truth trapz(dx,xpts.*f_kde)];
-        all_second_moments_ropdf = [all_second_moments_ropdf trapz(dx,(xpts.^2).*f_pred)];
-        all_second_moments_ground_truth = [all_second_moments_ground_truth trapz(dx,(xpts.^2).*f_kde)];
-        plot(xpts,f_kde,"--","LineWidth",1.5,"Color","black"); 
+        title("Case 118","FontSize",18);
+        xlabel("Line Energy","FontSize",18);
+        ylabel("CDF","FontSize",18);
+        xlim([0 140]);
+        ylim([0 1.0]);
+       
+        % add more lines 
         hold on;
-        plot(xpts,f_pred,"LineWidth",2.5,"Color","blue");
-        legend(["KDE","ROPDF"]);
-        hold off;
-
-        % compute CDF
-        subplot(1,3,3);
-        plot(xpts,cumtrapz(dx*f_kde),"--","LineWidth",2.5,"Color", [0.4, 0.4, 0.4, 0.2]);
-        hold on;
-        plot(xpts,cumtrapz(dx*f_pred),"LineWidth",1.5,"Color","blue");
-        legend(["KDE","ROPDF"]);
-        hold off;
-        % compute L^2 error
-        tmp  =trapz(dx,(f_kde-f_pred).^2)/trapz(dx,f_kde.^2);
-
-        disp(tmp)
-        all_l2_err = [all_l2_err tmp];
-
+        if curr_time == 6.0
+            legend(["t = 1.5", "", "t = 3.0", "", "t = 4.5", ...
+                "", "t = 6.0", "Benchmark"], ...
+                "FontSize",16, ...
+                "Location","southeast");
+            % save figure
+            exportgraphics(gcf,figure_name,"Resolution",200);
+            disp(strcat("Figure saved at t = ",num2str(curr_time)));
+        end
     end
+    % ------------------------------------------------------------
+
 end
 %% Plot estimated moments
 figure(1);

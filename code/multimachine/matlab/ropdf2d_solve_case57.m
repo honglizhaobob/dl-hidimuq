@@ -8,38 +8,40 @@
 clear; rng('default');
 %% Load data
 % Data should already have been simulated, see `ropdf_solve_case9.m`
-fname = "./data/case9_mc1d_coeff_data.mat";
+fname = "./data/case57_mc_data.mat";
 if ~isfile(fname)
     error("run the 1d file to generate data. ")
 else
     load(fname);
-    tt = tt(:);
-    nt = length(tt);
-    dt = tt(2)-tt(1);
+    % time grid definition should agree with the 1d
+    tf = 10.0;
+    dt = 0.01;           % learn PDE coefficients in increments of dt
+    tt = 0:dt:tf;        % coarse uniform time grid
+    nt = length(tt);     % number of time steps
 end
 %%
 % Compute energy for two lines connected to the same machine
-from_line1 = 4; to_line1 = 9;
-from_line2 = 7; to_line2 = 8;
+from_line1 = 35; to_line1 = 36;
+from_line2 = 36; to_line2 = 40;
 
 %% Learn coffcients & solve 2d marginal PDE by corner transport
 close all; 
 rng('default');
 
 % line is fixed and data simulated above
-from_line1; to_line1; mc_energy1; mc_condexp_target1;
-from_line2; to_line2; mc_energy2; mc_condexp_target2;
+from_line1; to_line1; mc_energy1; mc_target1;
+from_line2; to_line2; mc_energy2; mc_target2;
 
 % set up pde domain
-dx = 0.01; 
+dx = 0.02; 
 dy = dx*2;    % spatial step size
 ng = 2;             % number of ghost cells
 
 % left right boundaries
-x_min = 0; x_max = 1;
+x_min = 0; x_max = 2.0;
 nx = ceil((x_max-x_min)/dx);
 % top bottom boundaries
-y_min = 0; y_max = 2;
+y_min = 0; y_max = 2.0;
 ny = ceil((y_max-y_min)/dy);
 % cell centers
 xpts = linspace(x_min+0.5*dx,x_max-0.5*dx,nx)';
@@ -82,16 +84,14 @@ all_covariance_kde = [];
 mcro = 2000;
 for nn = 2:nt
     disp(nn)
-    curr_time = nn*dt;
     % estimate coefficients on cell edges
     x_data = squeeze(mc_energy1(1:mcro,nn-1));
     y_data = squeeze(mc_energy2(1:mcro,nn-1));
     % d/dx coefficient
-    response_x_data = squeeze(mc_condexp_target1(1:mcro,nn-1));
+    response_x_data = squeeze(mc_target1(1:mcro,nn-1));
     
     % mode for coefficient regression
-    %mode = "lin";       % linear regression
-    mode = "lowess";    % LOWESS smoothing
+    mode = "lowess";       % linear regression
     coeff1 = get_coeff2d(x_data,y_data,response_x_data,xpts_e,ypts_e,mode);
 
 %     figure(10);
@@ -100,7 +100,7 @@ for nn = 2:nt
 %     hold on; surf(Xge,Yge,coeff1); hold off;
 
     % d/dy coefficient
-    response_y_data = squeeze(mc_condexp_target2(1:mcro,nn-1));
+    response_y_data = squeeze(mc_target2(1:mcro,nn-1));
     coeff2 = get_coeff2d(x_data,y_data,response_y_data,xpts_e,ypts_e,mode);
 
     % zero out coefficients outside of main support
@@ -149,11 +149,24 @@ for nn = 2:nt
         error('PDE has NaN values');
     end
 
+    % visualize
+    fig=figure(1);
+    fig.Position = [100 500 1600 400];
+    subplot(1,2,1);
+    % plot predicted (RO-PDF)
     p_pred = p(3:end-2,3:end-2,nn);
+
+    surf(p_pred);
+    view([90,90,90]); 
+    subplot(1,2,2);
+    % plot exact (bivariate kde)
     tmp=ksdensity([mc_energy1(:,nn) mc_energy2(:,nn)], [Xg(:) Yg(:)]);
     tmp=reshape(tmp,[nx+4,ny+4]);
     p_kde = tmp(3:end-2,3:end-2);
     p_kde = p_kde/trapz(dy,trapz(dx,p_kde));
+    surf(p_kde);
+    view([90,90,90]); 
+
     % record relative error in L^2(R^2)
     tmp = trapz(dx, trapz(dy, (p_pred-p_kde).^2));
     tmp2 = trapz(dx, trapz(dy, p_kde.^2));
@@ -198,143 +211,6 @@ for nn = 2:nt
     cov_kde = cov(mc_energy1(:,nn),mc_energy2(:,nn));
     cov_kde = cov_kde(1,2);
     all_covariance_kde = [all_covariance_kde cov_kde];
-
-    
-    % ----------------------------------------------------------------------
-    % save figures
-    % ----------------------------------------------------------------------
-    figure_time = 0.3;
-    f1name = "./fig/CASE9_JointPDF.png";
-    f2name = "./fig/CASE9_CondCDF.png";
-    f3name = "./fig/CASE9_Condexp1.png";
-    f4name = "./fig/CASE9_Condexp2.png";
-
-    % ---------------------
-    fig = figure(1);
-    fig.Position = [100 500 1200 1000];
-    % Surface plot of predicted 2d PDF
-    surf(Xg(3:end-2,3:end-2),Yg(3:end-2,3:end-2),p_pred); 
-    view([90 90 90]); 
-    xlabel("Line 4-9","FontSize",30); 
-    ylabel("Line 7-8","FontSize",30);
-    zlabel("Joint PDF","FontSize",30);
-    title("t = 1.50","FontSize",30);
-    set(gca,"FontSize",20)
-
-    if curr_time == figure_time
-        exportgraphics(fig,f1name,"Resolution",300);
-    end
-    % ---------------------
-    % Plot of conditional PDF and compare with KDE
-    yidx = 21+2;     % 2 ghost cells 
-    y1 = ypts(yidx); % fixed y value
-    % integrate in x
-    p_y_marg_pred; p_y_marg_kde;
-    y1_marg = p_y_marg_pred(yidx);
-    % predicted conditional density: y1
-    x_cond_y1_pred = p_pred(yidx,:)./p_y_marg_pred(yidx);
-    % KDE conditional density
-    x_cond_y1_kde = p_kde(yidx,:)./p_y_marg_kde(yidx);
-    
-    % plot conditional PDF: f(x|y=y1) = f(x,y1)/f(11)
-    fig = figure(2);
-    fig.Position = [200 500 1600 1000];
-
-    subplot(1,3,1);
-    plot(xpts(3:end-2),x_cond_y1_pred,"Color","blue","LineWidth",2.5);
-    hold on;
-    plot(xpts(3:end-2),x_cond_y1_kde,"--","LineWidth",5.0,"Color", ...
-        [0 0 0 0.5]);
-    xlabel("$u_1$","Interpreter","latex","FontSize",30);
-    ylabel("Conditional PDF", ...
-        "Interpreter","latex","FontSize",30);
-    title("$u_2=0.4$","Interpreter","latex","FontSize",30);
-    legend(["ROPDF", "KDE"],"Location","northeast","FontSize",30);
-    hold off;
-    set(gca,"FontSize",30)
-
-    % Plot of conditional PDF and compare with KDE
-    yidx = 31+2;     % 2 ghost cells 
-    y1 = ypts(yidx); % fixed y value
-    % integrate in x
-    p_y_marg_pred; p_y_marg_kde;
-    y1_marg = p_y_marg_pred(yidx);
-    % predicted conditional density: y1
-    x_cond_y1_pred = p_pred(yidx,:)./p_y_marg_pred(yidx);
-    % KDE conditional density
-    x_cond_y1_kde = p_kde(yidx,:)./p_y_marg_kde(yidx);
-    
-    % plot conditional PDF: f(x|y=y1) = f(x,y1)/f(11)
-    subplot(1,3,2);
-    plot(xpts(3:end-2),x_cond_y1_pred,"Color","red","LineWidth",2.5);
-    hold on;
-    plot(xpts(3:end-2),x_cond_y1_kde,"--","LineWidth",5.0,"Color", ...
-        [0 0 0 0.5]);
-    xlabel("$u_1$","Interpreter","latex","FontSize",30);
-    title("$u_2=0.6$","Interpreter","latex","FontSize",30);
-    hold off;
-    set(gca,"FontSize",30)
-
-    % Plot of conditional PDF and compare with KDE
-    yidx = 41+2;     % 2 ghost cells 
-    y1 = ypts(yidx); % fixed y value
-    % integrate in x
-    p_y_marg_pred; p_y_marg_kde;
-    y1_marg = p_y_marg_pred(yidx);
-    % predicted conditional density: y1
-    x_cond_y1_pred = p_pred(yidx,:)./p_y_marg_pred(yidx);
-    % KDE conditional density
-    x_cond_y1_kde = p_kde(yidx,:)./p_y_marg_kde(yidx);
-    
-    % plot conditional PDF: f(x|y=y1) = f(x,y1)/f(11)
-    subplot(1,3,3);
-    plot(xpts(3:end-2),x_cond_y1_pred,"Color","magenta","LineWidth",2.5);
-    hold on;
-    plot(xpts(3:end-2),x_cond_y1_kde,"--","LineWidth",5.0,"Color", ...
-        [0 0 0 0.5]);
-    xlabel("$u_1$","Interpreter","latex","FontSize",30);
-    title("$u_2=0.8$","Interpreter","latex","FontSize",30);
-    hold off;
-    set(gca,"FontSize",30);
-    hold off;
-
-    if curr_time == figure_time
-        exportgraphics(fig,f2name,"Resolution",300);
-    end
-
-    % Plot coefficient 1
-    fig = figure(3);
-    fig.Position = [300 500 1200 1000];
-    scatter3(x_data,y_data,response_x_data,10,"+","MarkerEdgeColor","black"); 
-    hold on; surf(Xg,Yg,coeff1,"EdgeAlpha",0.2);
-    xlabel("Line 4-9","FontSize",60); 
-    ylabel("Line 7-8","FontSize",60);
-    title("Advection in $U^{(1)}$", "Interpreter", "latex", "FontSize", 60, ...
-        "FontWeight", "bold");
-    hold off;
-
-    set(gca,"FontSize",60)
-
-    if curr_time == figure_time
-        exportgraphics(fig,f3name,"Resolution",300);
-    end
-
-
-    % Plot coefficient 2
-    fig = figure(4);
-    fig.Position = [400 500 1200 1000];
-    scatter3(x_data,y_data,response_y_data,10,"+","MarkerEdgeColor","black"); 
-    hold on; surf(Xg,Yg,coeff2,"EdgeAlpha",0.2); 
-    xlabel("Line 4-9","FontSize",60); 
-    ylabel("Line 7-8","FontSize",60);
-    title("Advection in $U^{(2)}$", "Interpreter", "latex", "FontSize", 60, ...
-        "FontWeight", "bold");
-    hold off;
-
-    set(gca,"FontSize",60)
-    if curr_time == figure_time
-        exportgraphics(fig,f4name,"Resolution",300);
-    end
 end
 %% Plot estimated moments
 figure(1);
