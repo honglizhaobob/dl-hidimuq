@@ -212,6 +212,11 @@ xpts_e = [xpts-0.5*dx; xpts(end)+0.5*dx];   % cell edges for advection coeff
 f = zeros(nx+2*ng,nt);
 f_ind = ng+1:nx+ng;     % indices of non-ghost cells
 
+% compute failure level for plotting
+mean_energy_level = mean(mc_energy1(:));
+std_energy_level = std(mc_energy1,[],"all");
+failure_level = mean_energy_level+2.0*std_energy_level;
+
 f0 = [squeeze(mc_energy(:,60))];
 bw = 0.9*min(std(f0), iqr(f0)/1.34)*(mc)^(-0.2);
 f(f_ind,61) = ksdensity(f0,xpts,'bandwidth',bw);
@@ -363,10 +368,15 @@ for nn = 62:nt
         hold on;
         plot(xpts,F_kde,"--","LineWidth",5.0,"Color",[0 0 0 0.5]);
 
-        title("Case 30","FontSize",18);
-        xlabel("Line Energy","FontSize",18);
-        ylabel("CDF","FontSize",18);
+        title("Case 30","FontSize",18,"FontName","Times New Roman");
+        xlabel("Line Energy 6-7","FontSize",18,"FontName","Times New Roman");
+        ylabel("CDF","FontSize",18,"FontName","Times New Roman");
         ylim([0 1.0]);
+        ax = gca;
+        ax.FontSize = 18;
+        box on;
+        ax = gca;
+        ax.LineWidth = 2;
        
         % add more lines 
         hold on;
@@ -375,8 +385,15 @@ for nn = 62:nt
                 "", "t = 2.5", "Benchmark"], ...
                 "FontSize",16, ...
                 "Location","southeast");
+            % plot failure level
+            xl = xline(failure_level,'-.', ...
+                "Threshold","LineWidth",3.0, ...
+                "Color","red", ...
+                'DisplayName','Threshold');
+            xl.LabelVerticalAlignment = 'middle';
+            xl.LabelHorizontalAlignment = 'center';
             % save figure
-            exportgraphics(gcf,figure_name,"Resolution",200);
+            exportgraphics(gcf,figure_name,"Resolution",300);
             disp(strcat("Figure saved at t = ",num2str(curr_time)));
         end
     end
@@ -406,3 +423,104 @@ title("Estimated second moments");
 figure(3);
 plot(tt(1:length(all_first_moments_ropdf)), all_l2_err, "LineWidth", 3.0, "Color", "black"); 
 title("L^2 Error over time");
+
+%% Error convergence in coefficient samples
+all_mc = [250, 1000, 2500, 5000, 7500, 10000];
+n_trials = length(all_mc);
+% store relative L^2 errors from KDE
+all_errors = zeros(n_trials,nt-1);
+all_time = zeros(n_trials,1);
+for i = 1:n_trials
+    % reduced order MC trial numbers
+    mcro = all_mc(i);
+    disp(strcat("===> MC = ", num2str(mcro)));
+    % time loop
+    tic
+    for nn = 100:nt
+        % current time of simulation
+        curr_time = dt*nn;
+        disp(nn)
+        % learn advection coeffcient via data and propagate PDE dynamics
+        % Exact solution is of form: E[Y | X]
+    
+        % get X data (previous time)
+        energy_data = squeeze(mc_energy(1:mcro,nn-1));
+        
+        % get Y data (previous time)
+        response_data = squeeze(mc_condexp_target(1:mcro,nn-1));
+    
+        % compute advection coefficient (need to be defined on cell centers)
+    
+        % Get adv. coefficient defined on xpts_e (size(coeff) = size(xpts_e))
+        coeff = get_coeff(energy_data,response_data,xpts_e,"lin");
+    
+    
+        % CFL condition for Lax-Wendroff --> variable time stepping
+        u_mag = max(abs(coeff));
+        if u_mag==0
+            dt2 = dt;
+        else
+            % CFL
+            dt2 = dx/u_mag; 
+        end
+        
+        if dt2 >= dt  % use the dt we already had
+            % Homogeneous Dirchlet BC's already set from allocation
+            f(f_ind,nn) = lax_wen(f(:,nn-1),f_ind,nx,coeff,dx,dt);
+        else
+            % CFL time step is smaller than time step for the samples.
+            % Solve pde at intermediate times with smaller time step,
+            %   using same coeff., and then output solution on the coarser time
+            %   grid.
+            
+            nt_temp = ceil(dt/dt2)+1; 
+            dt2 = dt/(nt_temp - 1);
+            f_temp = f(:,nn-1);
+            
+            if dt2==0 || isnan(dt2)
+                error('dt0 = 0 or NaN')
+            end
+            
+            for ll = 2:nt_temp
+                f_temp(f_ind) = lax_wen(f_temp,f_ind,nx,coeff,dx,dt2);
+            end   
+            f(f_ind,nn) = f_temp(f_ind);
+        end    
+
+        % force normalize
+        f(f_ind,nn) = f(f_ind,nn)/trapz(dx,f(f_ind,nn));
+        
+        if max(abs(f(:,nn)))>1e2
+            error('PDE blows up')
+        end
+        if max(isnan(f(:,nn)))==1
+            error('PDE has NaN values')
+        end
+    
+        % predicted solution
+        f_pred = f(f_ind,nn);
+        
+        % run KDE with all samples
+        f0 = [squeeze(mc_energy(:,nn))];
+        f_kde = ksdensity(f0,xpts,'Support','positive', ...
+            'BoundaryCorrection','reflection');
+
+        % compute relative L^2 error
+        tmp  =trapz(dx,(f_kde-f_pred).^2)/trapz(dx,(f_kde).^2);
+        figure(3);
+        plot(f_pred); 
+        hold on;
+        plot(f_kde);
+        hold off;
+        disp(tmp)
+        % store error
+        all_errors(i,nn) = tmp;
+    end
+    all_time(i) = toc;
+end
+
+%%
+% Linear regression
+%save("./data/CASE30_Lin_ConvStudy.mat", "all_errors", "all_mc", "all_time");
+% Gaussian LLR
+%save("./data/CASE30_GLLR_ConvStudy.mat", "all_errors", "all_mc", "all_time");

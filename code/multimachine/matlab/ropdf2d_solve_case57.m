@@ -7,7 +7,7 @@
 %%
 clear; rng('default');
 %% Load data
-% Data should already have been simulated, see `ropdf_solve_case9.m`
+% Data should already have been simulated, see `ropdf_solve_case57.m`
 fname = "./data/case57_mc_data.mat";
 if ~isfile(fname)
     error("run the 1d file to generate data. ")
@@ -33,15 +33,15 @@ from_line1; to_line1; mc_energy1; mc_target1;
 from_line2; to_line2; mc_energy2; mc_target2;
 
 % set up pde domain
-dx = 0.02; 
+dx = 0.5; 
 dy = dx*2;    % spatial step size
 ng = 2;             % number of ghost cells
 
 % left right boundaries
-x_min = 0; x_max = 2.0;
+x_min = -4.0; x_max = 120.0;
 nx = ceil((x_max-x_min)/dx);
 % top bottom boundaries
-y_min = 0; y_max = 2.0;
+y_min = -4.0; y_max = 120.0;
 ny = ceil((y_max-y_min)/dy);
 % cell centers
 xpts = linspace(x_min+0.5*dx,x_max-0.5*dx,nx)';
@@ -60,14 +60,31 @@ xpts_e = xpts-0.5*dx; ypts_e = ypts-0.5*dy;
 
 % allocate solution 
 p = zeros(nx+4,ny+4,nt);
+p2 = zeros(nx+4,ny+4,nt);
 % I.C. from KDE (defined on cell center)
-tmp=ksdensity([mc_energy1(:,1) mc_energy2(:,1)], [Xg(:) Yg(:)]);
+start_idx=1;
+tmp=ksdensity([mc_energy1(:,start_idx) mc_energy2(:,start_idx)], [Xg(:) Yg(:)]);
 tmp=reshape(tmp,[nx+4,ny+4]);
-p(:,:,1)=tmp;
+p(:,:,start_idx) = tmp;
+p2(:,:,start_idx) = tmp;
 % visualize
 figure(1);
-surf(Xg,Yg,p(:,:,1)); view([90,90,90]);
+surf(Xg,Yg,p(:,:,start_idx)); view([90,90,90]);
 title("IC"); xlabel("x"); ylabel("y"); zlabel("p(x,y,0)");
+
+%% KDE solution
+for nn = start_idx+1:nt
+    disp(nn)
+    tmp=ksdensity([mc_energy1(:,nn) mc_energy2(:,nn)], [Xg(:) Yg(:)]);
+    tmp=reshape(tmp,[nx+4,ny+4]);
+    p_kde = tmp(3:end-2,3:end-2);
+    p_kde = p_kde/trapz(dy,trapz(dx,p_kde));
+    figure(1);
+    surf(p_kde);
+    view([90,90,90]); 
+    % save
+    p2(3:end-2,3:end-2,nn)=p_kde;
+end
 
 %% Time loop
 all_l2_err = [];
@@ -81,7 +98,7 @@ all_covariance_pred = [];
 all_covariance_kde = [];
 
 % reduced order MC trials
-mcro = 2000;
+mcro = 5000;
 for nn = 2:nt
     disp(nn)
     % estimate coefficients on cell edges
@@ -94,18 +111,9 @@ for nn = 2:nt
     mode = "lowess";       % linear regression
     coeff1 = get_coeff2d(x_data,y_data,response_x_data,xpts_e,ypts_e,mode);
 
-%     figure(10);
-%     scatter3(x_data,y_data,response_x_data,2,"MarkerFaceColor","red");
-%     view([90 90 90]);
-%     hold on; surf(Xge,Yge,coeff1); hold off;
-
     % d/dy coefficient
     response_y_data = squeeze(mc_target2(1:mcro,nn-1));
     coeff2 = get_coeff2d(x_data,y_data,response_y_data,xpts_e,ypts_e,mode);
-
-    % zero out coefficients outside of main support
-    %coeff1 = clip_coeff(coeff1,Xg,Yg,x_data,y_data);
-    %coeff2 = clip_coeff(coeff2,Xg,Yg,x_data,y_data);
 
     % modify time step size based on cfl
     tmp=(max(max(abs(coeff1/dx)))+max(max(abs(coeff2/dy))));
@@ -212,6 +220,9 @@ for nn = 2:nt
     cov_kde = cov_kde(1,2);
     all_covariance_kde = [all_covariance_kde cov_kde];
 end
+%% Save computed solutions
+save("./data/CASE57_2d_ROPDF_Sol.mat", "xpts","ypts","tt","p2");
+
 %% Plot estimated moments
 figure(1);
 plot(tt(1:length(all_xmean_pred)), all_xmean_pred, "LineWidth", 2.0, "Color", "red"); 

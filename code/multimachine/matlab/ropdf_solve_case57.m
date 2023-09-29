@@ -136,8 +136,8 @@ u0 = burned_ic;
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Case 57: RO-PDF problem set up
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-tf = 10.0;
-dt = 0.01;           % learn PDE coefficients in increments of dt
+tf = 8.0;
+dt = 0.001;           % learn PDE coefficients in increments of dt
 tt = 0:dt:tf;        % coarse uniform time grid
 nt = length(tt);     % number of time steps
 
@@ -213,11 +213,17 @@ xpts_e = [xpts-0.5*dx; xpts(end)+0.5*dx];   % cell edges for advection coeff
 f = zeros(nx+2*ng,nt);
 f_ind = ng+1:nx+ng;     % indices of non-ghost cells
 
-f0 = [squeeze(mc_energy(:,41))];
+% compute failure level for plotting
+mean_energy_level = mean(mc_energy1(:));
+std_energy_level = std(mc_energy1,[],"all");
+failure_level = mean_energy_level+2.0*std_energy_level;
+
+start_idx = 41;
+f0 = [squeeze(mc_energy(:,start_idx))];
 bw = 0.9*min(std(f0), iqr(f0)/1.34)*(mc)^(-0.2);
-f(f_ind,41) = ksdensity(f0,xpts,'bandwidth',bw,"Support","positive","BoundaryCorrection","reflection");
+f(f_ind,start_idx) = ksdensity(f0,xpts,'bandwidth',bw,"Support","positive","BoundaryCorrection","reflection");
 figure(1);
-plot(xpts, f(f_ind,41),"LineWidth",1.5,"Color","black");
+plot(xpts, f(f_ind,start_idx),"LineWidth",1.5,"Color","black");
 %% Begin RO-PDF
 all_first_moments_ropdf = [];
 all_first_moments_ground_truth = [];
@@ -230,7 +236,7 @@ all_l2_err = [];
 % reduced order MC trial numbers
 mcro = 2000;
 % time loop
-for nn = 42:nt
+for nn = start_idx+1:nt
     curr_time = dt*nn;
     disp(nn)
     % learn advection coeffcient via data and propagate PDE dynamics
@@ -324,50 +330,59 @@ for nn = 42:nt
     plot(xpts,f_kde,"--", "Color", "black",'linewidth',2);
     hold off;
     
-    all_first_moments_ropdf = [all_first_moments_ropdf trapz(dx,xpts.*f_pred)];
-    all_first_moments_ground_truth = [all_first_moments_ground_truth trapz(dx,xpts.*f_kde)];
-    all_second_moments_ropdf = [all_second_moments_ropdf trapz(dx,(xpts.^2).*f_pred)];
-    all_second_moments_ground_truth = [all_second_moments_ground_truth trapz(dx,(xpts.^2).*f_kde)];
-    
     % compute L^2 error
-    tmp  =trapz(dx,(f_kde-f_pred).^2);
+    tmp  =trapz(dx,(f_kde-f_pred).^2)/trapz(dx,f_kde.^2);
     disp(tmp)
-    all_l2_err = [all_l2_err tmp];
 
     % ------------------------------------------------------------
     % SAVE FIGURES
     % ------------------------------------------------------------
     % save at selected times 
-    if curr_time == 1.5 || curr_time == 3.0 || ... 
-            curr_time == 4.5 || curr_time == 6.0
-        figure_name = strcat("./fig/CASE57_ROPDF_CDF_Time_", ...
-            num2str(curr_time),".png");
-        % Save figures for reporting 
-        fig=figure(2);
-        fig.Position = [500 500 500 500];
-        % estimate CDF
-        F_pred = cumtrapz(f_pred*dx);
-        F_kde = cumtrapz(f_kde*dx);
-        plot(xpts,F_pred,"LineWidth",3.0);
-        hold on;
-        plot(xpts,F_kde,"--","LineWidth",5.0,"Color",[0 0 0 0.5]);
-
-        title("Case 57","FontSize",18);
-        xlabel("Line Energy","FontSize",18);
-        ylabel("CDF","FontSize",18);
-        xlim([0 140]);
-        ylim([0 1.0]);
-       
-        % add more lines 
-        hold on;
-        if curr_time == 6.0
-            legend(["t = 1.5", "", "t = 3.0", "", "t = 4.5", ...
-                "", "t = 6.0", "Benchmark"], ...
-                "FontSize",16, ...
-                "Location","southeast");
-            % save figure
-            exportgraphics(gcf,figure_name,"Resolution",200);
-            disp(strcat("Figure saved at t = ",num2str(curr_time)));
+    save_figures = true;
+    if save_figures
+        if curr_time == 1.5 || curr_time == 3.0 || ... 
+                curr_time == 4.5 || curr_time == 6.0
+            figure_name = strcat("./fig/CASE57_ROPDF_CDF_Time_", ...
+                num2str(curr_time),".png");
+            % Save figures for reporting 
+            fig=figure(2);
+            fig.Position = [500 500 500 500];
+            % estimate CDF
+            F_pred = cumtrapz(f_pred*dx);
+            F_kde = cumtrapz(f_kde*dx);
+            plot(xpts,F_pred,"LineWidth",3.0);
+            hold on;
+            plot(xpts,F_kde,"--","LineWidth",5.0,"Color",[0 0 0 0.5]);
+    
+            title("Case 57","FontSize",18,"FontName","Times New Roman");
+            xlabel("Line 36-40 Energy","FontSize",18,"FontName","Times New Roman");
+            ylabel("CDF","FontSize",18,"FontName","Times New Roman");
+            xlim([0 140]);
+            ylim([0 1.0]);
+            ax = gca;
+            ax.FontSize = 18;
+            box on;
+            ax = gca;
+            ax.LineWidth = 2;
+           
+            % add more lines 
+            hold on;
+            if curr_time == 6.0
+                legend(["t = 1.5", "", "t = 3.0", "", "t = 4.5", ...
+                    "", "t = 6.0", "Benchmark"], ...
+                    "FontSize",16, ...
+                    "Location","southeast");
+                % plot failure level
+                xl = xline(failure_level,'-.', ...
+                    "Threshold","LineWidth",3.0, ...
+                    "Color","red", ...
+                    'DisplayName','Threshold');
+                xl.LabelVerticalAlignment = 'middle';
+                xl.LabelHorizontalAlignment = 'center';
+                % save figure
+                exportgraphics(gcf,figure_name,"Resolution",300);
+                disp(strcat("Figure saved at t = ",num2str(curr_time)));
+            end
         end
     end
 
