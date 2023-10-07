@@ -35,7 +35,8 @@ plot(tt,all_mutual_info(2,:),":","LineWidth",3.5);
 hold on;
 plot(tt,all_mutual_info(3,:),"-.","LineWidth",3.5);
 
-legend(["Case 9","Case 30","Case 57"], ...
+legend(["Case 9: Line 4-9,7-8","Case 30: Line 6-7,6-9", ...
+    "Case 57: Line 35-36,36-40"], ...
     "FontSize",30,"FontName","Times New Roman","Location","northwest");
 xlabel("Time","FontSize",30,"FontName","Times New Roman");
 ylabel("Mutual Information","FontSize",30,"FontName","Times New Roman");
