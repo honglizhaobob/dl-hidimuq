@@ -1,4 +1,3 @@
-```markdown
 # Learning for High-Dimensional Uncertainty Quantification
 
 This repository contains driver codes for the data-driven reduced-order probability density function (PDF) method. Our goal is to numerically solve for the PDF of a quantity of interest (QoI) that depends on an underlying stochastic system. The modeling approach is as follows:
@@ -32,4 +31,4 @@ This repository contains driver codes for the data-driven reduced-order probabil
 - Hongli Zhao, Tyler E. Maltba, D. Adrian Maldonado, Emil Constantinescu, Mihai Anitescu. "Data-Driven Estimation of Failure Probabilities in Correlated Structure-Preserving Stochastic Power System Models" [arXiv:2401.02555](https://arxiv.org/abs/2401.02555), 2024.
 
 - Tyler E. Maltba, Hongli Zhao, D. Adrian Maldonado. "Data-driven Closures & Assimilation for Stiff Multiscale Random Dynamics" [arXiv:2312.10243](https://arxiv.org/abs/2312.10243), 2023.
-```
+
